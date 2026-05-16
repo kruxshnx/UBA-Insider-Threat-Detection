@@ -1,0 +1,27 @@
+# Ignore Python bytecode, virtual envs, and OS artifacts
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+.git/
+*.egg-info/
+
+# Large data files (mounted via volume instead)
+data/
+models/
+
+# IDE and OS
+.vscode/
+.idea/
+*.lnk
+Thumbs.db
+.DS_Store
+
+# Build artifacts
+*.log
+eval_*.txt
+evaluation_results*.txt
+run_log.txt
+train.log

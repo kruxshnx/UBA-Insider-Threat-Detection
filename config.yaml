@@ -1,0 +1,323 @@
+# Configuration file for UBA & Insider Threat Detection System
+# All thresholds, multipliers, and paths should be defined here
+
+# =============================================================================
+# PATHS
+# =============================================================================
+paths:
+  data_raw: "data/raw"
+  data_processed: "data/processed"
+  risk_output: "data/risk_output"
+  models_baseline: "models/baseline"
+  models_lstm: "models/lstm"
+
+# =============================================================================
+# DATA GENERATION
+# =============================================================================
+data_generation:
+  num_users: 100
+  days_to_simulate: 30
+  insider_threat_user: "U105"
+  insider_threat_start_day: 25
+
+  # Scenario definitions — used by training and evaluation pipelines
+  scenarios:
+    malicious_user: "U105"
+    malicious_start_day: "2024-01-20"
+
+# =============================================================================
+# FEATURE ENGINEERING
+# =============================================================================
+features:
+  # Window sizes for behavioral features
+  window_1h: 1 # hours
+  window_24h: 24 # hours
+  window_7d: 168 # hours (7 * 24)
+
+  # After-hours definition
+  work_start_hour: 7
+  work_end_hour: 20
+  
+  # =============================================================================
+  # BEHAVIORAL BIOMETRICS CONFIGURATION
+  # =============================================================================
+  behavioral_biometrics:
+    # Mouse dynamics
+    mouse_velocity_threshold: 500.0
+    mouse_tortuosity_threshold: 3.0
+    
+    # Keystroke dynamics
+    keystroke_flight_min: 0.03  # 30ms minimum flight time
+    keystroke_flight_max: 2.0   # 2s maximum flight time
+    keystroke_anomaly_threshold: 0.5
+    
+    # Work integrity
+    idle_threshold_seconds: 300  # 5 minutes
+    productive_app_ratio_threshold: 0.5
+    
+    # Session entropy
+    entropy_window_minutes: 5
+    entropy_low_threshold: 60
+    entropy_medium_threshold: 80
+    entropy_high_threshold: 95
+
+# =============================================================================
+# ML MODELS - LSTM AUTOENCODER
+# =============================================================================
+lstm:
+  sequence_length: 10
+  hidden_dim: 32
+  num_layers: 2
+  batch_size: 64
+  epochs: 10
+  learning_rate: 0.001
+  dropout: 0.1
+
+# =============================================================================
+# ML MODELS - BASELINE
+# =============================================================================
+baseline:
+  model_type: "isolation_forest"  # or "ocsvm"
+  n_estimators: 100
+  contamination: 0.05
+  random_state: 42
+
+# =============================================================================
+# THRESHOLDING
+# =============================================================================
+thresholds:
+  # Statistical thresholding method: "percentile", "std", "iqr"
+  method: "percentile"
+  percentile: 99.5          # For percentile method
+  std_multiplier: 3.0       # For std method (mean + N*std)
+  iqr_multiplier: 1.5       # For IQR method
+  
+  # Fixed thresholds (used if statistical not available)
+  lstm_anomaly_mean: 0.16
+  lstm_anomaly_std: 0.12
+
+# =============================================================================
+# RISK SCORING
+# =============================================================================
+risk_scoring:
+  # Base score mapping
+  base_multiplier: 250
+  max_risk: 100
+
+  # Role multipliers
+  role_multipliers:
+    Admin: 1.5
+    Contractor: 1.2
+    Employee: 1.0
+
+  # Time multipliers
+  after_hours_multiplier: 1.5
+
+  # Activity multipliers
+  activity_multipliers:
+    "File Copy": 4.0
+    "Connect": 3.0 # USB
+    "File Delete": 2.0
+    "File Write": 1.5
+    default: 1.0
+
+  # Risk decay
+  decay_rate: 0.9 # per day
+
+  # Aggregation weights
+  max_weight: 1.0
+  sum_weight: 0.1
+  
+  # =============================================================================
+  # WORK INTEGRITY MULTIPLIERS (Vigilant Lens 2.0)
+  # =============================================================================
+  work_integrity:
+    # Productivity penalty (low productive app usage)
+    productivity_penalty: 1.3
+    
+    # Anomalous velocity multiplier (>5x baseline)
+    anomalous_velocity_mult: 2.0
+    
+    # Session entropy multipliers
+    entropy_high_mult: 1.5
+    entropy_critical_mult: 2.5
+    
+    # Mouse dynamics threshold (tortuosity index)
+    mouse_tortuosity_threshold: 3.0
+    
+    # Keystroke anomaly threshold
+    keystroke_anomaly_threshold: 0.5
+
+# =============================================================================
+# ALERTING
+# =============================================================================
+alerting:
+  # Thresholds for alert generation
+  medium_threshold: 70
+  high_threshold: 85
+  critical_threshold: 95
+  
+  # Alert persistence (number of events before alerting)
+  persistence_count: 2
+  
+  # Cooldown period (hours)
+  cooldown_hours: 24
+
+# =============================================================================
+# USER BASELINE DRIFT
+# =============================================================================
+baseline_drift:
+  # Rolling window for user baseline (days)
+  baseline_window_days: 14
+
+  # Standard deviation multiplier for drift detection
+  drift_sigma: 2.0
+
+# =============================================================================
+# DYNAMIC ROLE-ENTROPY MAPPING (Vigilant Lens 2.0)
+# =============================================================================
+entropy_mapping:
+  # Entropy component weights
+  entropy_weights:
+    activity: 0.35
+    app: 0.25
+    domain: 0.25
+    temporal: 0.15
+  
+  # Risk thresholds (percentile-based)
+  low_entropy_threshold: 60
+  medium_entropy_threshold: 80
+  high_entropy_threshold: 95
+  
+  # Role baseline multipliers (some roles naturally have higher entropy)
+  role_baseline_multipliers:
+    Admin: 1.3
+    IT: 1.25
+    Contractor: 1.15
+    Employee: 1.0
+    Analyst: 1.1
+    Developer: 1.2
+
+# =============================================================================
+# MITRE ATT&CK MAPPING
+# =============================================================================
+mitre_mapping:
+  # Activity -> MITRE Tactic/Technique
+  "File Copy":
+    tactic: "TA0010"
+    tactic_name: "Exfiltration"
+    technique: "T1052"
+    technique_name: "Exfiltration Over Physical Medium"
+  "Connect":
+    tactic: "TA0010"
+    tactic_name: "Exfiltration"
+    technique: "T1200"
+    technique_name: "Hardware Additions"
+  "Logon":
+    tactic: "TA0001"
+    tactic_name: "Initial Access"
+    technique: "T1078"
+    technique_name: "Valid Accounts"
+  "After Hours Logon":
+    tactic: "TA0006"
+    tactic_name: "Credential Access"
+    technique: "T1078"
+    technique_name: "Valid Accounts"
+  "File Delete":
+    tactic: "TA0040"
+    tactic_name: "Impact"
+    technique: "T1485"
+    technique_name: "Data Destruction"
+
+# =============================================================================
+# API SETTINGS
+# =============================================================================
+api:
+  title: "UBA ITD API"
+  version: "2.0.0"
+  cors_origins:
+    - "http://localhost:5173"
+    - "http://localhost:5174"
+    - "http://localhost:3000"
+  
+  # Rate limiting
+  rate_limit_requests: 100
+  rate_limit_window_seconds: 60
+
+# =============================================================================
+# EVALUATION
+# =============================================================================
+evaluation:
+  ground_truth_user: "U105"
+  ground_truth_start_day: 25
+
+# =============================================================================
+# REAL-TIME TELEMETRY (Vigilant Lens 2.0)
+# =============================================================================
+telemetry:
+  # Agent configuration
+  send_interval_seconds: 5
+  debug_mode: false
+  
+  # Database
+  db_path: "data/telemetry.db"
+  
+  # Thresholds
+  mouse_velocity_threshold: 500.0
+  keystroke_flight_threshold_ms: 200.0
+  
+  # Productivity
+  productivity_window_days: 7
+  signature_deviation_threshold: 2.0
+
+# Role-application mapping for productivity alignment
+role_app_mapping:
+  Admin: ["powershell", "terminal", "azure", "admin"]
+  Developer: ["vs code", "visual studio", "terminal", "git", "docker"]
+  HR: ["excel", "workday", "successfactors", "hris"]
+  Finance: ["excel", "quickbooks", "sap", "oracle", "bloomberg"]
+  Sales: ["salesforce", "hubspot", "dynamics", "outlook"]
+  Marketing: ["photoshop", "illustrator", "canva", "adobe"]
+  Support: ["zendesk", "freshdesk", "jira", "confluence"]
+  Analyst: ["excel", "tableau", "power bi", "sql", "python"]
+  Designer: ["photoshop", "illustrator", "figma", "sketch"]
+  Manager: ["excel", "powerpoint", "teams", "outlook", "slack"]
+  Contractor: ["vs code", "terminal", "git", "email"]
+
+# Productivity classification
+productivity:
+  productive_apps:
+    - "excel"
+    - "word"
+    - "powerpoint"
+    - "teams"
+    - "outlook"
+    - "vs code"
+    - "visual studio"
+    - "jira"
+    - "confluence"
+    - "salesforce"
+    - "sap"
+    - "tableau"
+    - "photoshop"
+    - "terminal"
+    - "git"
+  
+  neutral_apps:
+    - "chrome"
+    - "firefox"
+    - "browser"
+    - "calculator"
+    - "notepad"
+  
+  distracted_apps:
+    - "netflix"
+    - "youtube"
+    - "tiktok"
+    - "instagram"
+    - "facebook"
+    - "twitter"
+    - "reddit"
+    - "steam"
+    - "discord"
+    - "game"

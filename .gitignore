@@ -1,0 +1,36 @@
+# Environments
+venv/
+.venv/
+env/
+.env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Logs and databases
+*.log
+*.sqlite3
+
+.env
+*.db
+*.pdf
+data/processed/*.csv
+models/lstm/
+models/baseline/
+models/hybrid/
+data/processed/
+data/risk_output/
+data/security_output/
+data/charts/
+models/shadow/
+
+website/node_modules/
+website/dist/
+*.lnk
+*.joblib
+*.pt
+*.pth
+data/telemetry_dataset.csv

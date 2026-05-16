@@ -1,0 +1,40 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# UBA & Insider Threat Detection — Pinned Dependencies
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Core
+numpy==2.4.2
+pandas==3.0.0
+polars==1.38.1
+pyarrow==23.0.0
+scipy==1.17.0
+
+# Machine Learning
+torch==2.10.0
+scikit-learn==1.8.0
+xgboost==3.1.3
+joblib==1.5.3
+shap==0.50.0
+
+# Synthetic Data
+faker==40.4.0
+
+# API & Backend
+fastapi==0.128.5
+uvicorn==0.40.0
+pydantic==2.12.5
+python-multipart==0.0.22
+httpx==0.28.1
+
+# Utilities
+PyYAML==6.0.3
+tqdm==4.67.3
+
+# Telemetry Agent
+pynput==1.7.7
+psutil==6.1.1
+requests==2.32.3
+pywin32==310
+
+# Dev & Testing
+pytest==9.0.2

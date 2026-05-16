@@ -1,0 +1,13 @@
+{
+  "role": "Employee",
+  "n_sequences": 1155,
+  "n_features": 7,
+  "final_loss": 0.6270899082484999,
+  "threshold": 3.717838764190674,
+  "threshold_method": "percentile",
+  "error_mean": 0.6256017088890076,
+  "error_std": 0.6367722749710083,
+  "error_p50": 0.4185260832309723,
+  "error_p95": 1.7054367065429688,
+  "error_p99": 3.3108766078948975
+}

@@ -1,0 +1,101 @@
+id,role,dept,pc
+U100,Employee,Clinical research associate,PC-100
+U101,Contractor,Agricultural consultant,PC-101
+U102,Employee,Haematologist,PC-102
+U103,Employee,Financial risk analyst,PC-103
+U104,Employee,Environmental health practitioner,PC-104
+U105,Employee,Corporate treasurer,PC-105
+U106,Employee,"Civil engineer, consulting",PC-106
+U107,Admin,Sports administrator,PC-107
+U108,Employee,Chartered loss adjuster,PC-108
+U109,Employee,Therapeutic radiographer,PC-109
+U110,Employee,"Pharmacist, hospital",PC-110
+U111,Contractor,Ambulance person,PC-111
+U112,Admin,Air traffic controller,PC-112
+U113,Employee,Chief Financial Officer,PC-113
+U114,Employee,Engineering geologist,PC-114
+U115,Employee,"Exhibitions officer, museum/gallery",PC-115
+U116,Employee,Risk analyst,PC-116
+U117,Employee,Town planner,PC-117
+U118,Employee,Aid worker,PC-118
+U119,Employee,"Surveyor, mining",PC-119
+U120,Employee,"Engineer, civil (contracting)",PC-120
+U121,Employee,Sports administrator,PC-121
+U122,Employee,Personnel officer,PC-122
+U123,Employee,English as a second language teacher,PC-123
+U124,Employee,"Production assistant, radio",PC-124
+U125,Employee,Theme park manager,PC-125
+U126,Employee,Health physicist,PC-126
+U127,Employee,Accounting technician,PC-127
+U128,Employee,"Designer, jewellery",PC-128
+U129,Employee,"Pharmacist, hospital",PC-129
+U130,Employee,"Librarian, public",PC-130
+U131,Employee,Health physicist,PC-131
+U132,Employee,"Designer, furniture",PC-132
+U133,Contractor,"Engineer, structural",PC-133
+U134,Contractor,Legal secretary,PC-134
+U135,Admin,"Civil engineer, consulting",PC-135
+U136,Employee,Chief Executive Officer,PC-136
+U137,Employee,Museum/gallery conservator,PC-137
+U138,Employee,Chief Strategy Officer,PC-138
+U139,Employee,Mechanical engineer,PC-139
+U140,Employee,Local government officer,PC-140
+U141,Employee,Trade mark attorney,PC-141
+U142,Employee,"Geneticist, molecular",PC-142
+U143,Contractor,Armed forces logistics/support/administrative officer,PC-143
+U144,Employee,Psychiatric nurse,PC-144
+U145,Employee,Software engineer,PC-145
+U146,Employee,Company secretary,PC-146
+U147,Employee,Multimedia specialist,PC-147
+U148,Employee,Careers information officer,PC-148
+U149,Employee,Sub,PC-149
+U150,Contractor,Hospital doctor,PC-150
+U151,Employee,Water engineer,PC-151
+U152,Contractor,Medical illustrator,PC-152
+U153,Admin,Technical brewer,PC-153
+U154,Employee,"Engineer, agricultural",PC-154
+U155,Contractor,Building control surveyor,PC-155
+U156,Employee,Armed forces technical officer,PC-156
+U157,Employee,Estate agent,PC-157
+U158,Employee,Horticultural consultant,PC-158
+U159,Employee,Cartographer,PC-159
+U160,Employee,"Exhibitions officer, museum/gallery",PC-160
+U161,Employee,Chiropractor,PC-161
+U162,Admin,Museum/gallery conservator,PC-162
+U163,Employee,Health physicist,PC-163
+U164,Employee,Professor Emeritus,PC-164
+U165,Employee,Medical sales representative,PC-165
+U166,Employee,"Designer, textile",PC-166
+U167,Admin,Metallurgist,PC-167
+U168,Employee,Marine scientist,PC-168
+U169,Contractor,"Engineer, manufacturing systems",PC-169
+U170,Employee,"Geologist, engineering",PC-170
+U171,Employee,Building surveyor,PC-171
+U172,Employee,Transport planner,PC-172
+U173,Admin,Dramatherapist,PC-173
+U174,Employee,"Social research officer, government",PC-174
+U175,Employee,Financial risk analyst,PC-175
+U176,Employee,"Development worker, community",PC-176
+U177,Employee,"Psychologist, counselling",PC-177
+U178,Employee,Museum education officer,PC-178
+U179,Employee,Geophysicist/field seismologist,PC-179
+U180,Admin,"Surveyor, hydrographic",PC-180
+U181,Employee,English as a foreign language teacher,PC-181
+U182,Employee,"Journalist, broadcasting",PC-182
+U183,Employee,Banker,PC-183
+U184,Employee,Estate manager/land agent,PC-184
+U185,Employee,Ambulance person,PC-185
+U186,Employee,Interpreter,PC-186
+U187,Employee,Oncologist,PC-187
+U188,Admin,"Geologist, wellsite",PC-188
+U189,Employee,Brewing technologist,PC-189
+U190,Employee,"Engineer, mining",PC-190
+U191,Employee,Tax adviser,PC-191
+U192,Employee,International aid/development worker,PC-192
+U193,Employee,"Engineer, petroleum",PC-193
+U194,Employee,Restaurant manager,PC-194
+U195,Employee,Occupational hygienist,PC-195
+U196,Employee,Proofreader,PC-196
+U197,Employee,Customer service manager,PC-197
+U198,Employee,Geochemist,PC-198
+U199,Employee,Corporate treasurer,PC-199

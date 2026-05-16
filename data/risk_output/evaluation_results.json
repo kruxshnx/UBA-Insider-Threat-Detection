@@ -1,0 +1,65 @@
+{
+  "evaluation_time": "2026-02-06T11:59:09.449528",
+  "detection": {
+    "threat_user": "U105",
+    "detected": true,
+    "detection_day": 28,
+    "expected_start_day": 25,
+    "detection_delay": 3,
+    "first_detection_time": "2024-01-29 17:26:37.842405",
+    "max_risk_score": 100.0,
+    "high_risk_events": 20,
+    "total_events": 406
+  },
+  "precision_recall": {
+    "true_positives": 20,
+    "false_positives": 888,
+    "false_negatives": 75,
+    "true_negatives": 17741,
+    "precision": 0.022,
+    "recall": 0.2105,
+    "f1_score": 0.0399,
+    "alert_threshold": 70
+  },
+  "false_positives": {
+    "total_normal_users": 49,
+    "users_with_false_positives": 42,
+    "total_false_positive_events": 888,
+    "avg_fp_per_user": 21.14,
+    "max_fp_single_user": 114,
+    "fp_rate": 0.8571
+  },
+  "user_analysis": {
+    "total_users": 50,
+    "threat_user_rank": 8,
+    "top_5_users": [
+      {
+        "user": "U101",
+        "total_risk_score": 575.0780554001349
+      },
+      {
+        "user": "U111",
+        "total_risk_score": 538.1613325253468
+      },
+      {
+        "user": "U107",
+        "total_risk_score": 522.2504431855474
+      },
+      {
+        "user": "U134",
+        "total_risk_score": 454.5882256745192
+      },
+      {
+        "user": "U112",
+        "total_risk_score": 438.2608438845186
+      }
+    ]
+  },
+  "summary": {
+    "threat_detected": true,
+    "detection_delay_days": 3,
+    "precision": 0.022,
+    "recall": 0.2105,
+    "f1": 0.0399
+  }
+}

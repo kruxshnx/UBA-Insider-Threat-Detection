@@ -1,0 +1,41 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Docker Compose — Full UBA Stack
+# ──────────────────────────────────────────────────────────────────────────────
+version: "3.9"
+
+services:
+  # ── Backend API ───────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: uba-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data # Persist generated data
+      - ./models:/app/models # Persist trained models
+    environment:
+      - UBA_LOG_LEVEL=INFO
+      - UBA_CORS_ORIGINS=http://localhost:5173,http://localhost:3000
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import httpx; r=httpx.get('http://localhost:8000/health'); assert r.status_code==200" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  # ── Frontend (React/Vite) ─────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./website
+      dockerfile: Dockerfile
+    container_name: uba-frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      - VITE_API_URL=http://backend:8000
+    restart: unless-stopped

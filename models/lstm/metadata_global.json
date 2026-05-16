@@ -1,0 +1,13 @@
+{
+  "role": "global",
+  "n_sequences": 1436,
+  "n_features": 7,
+  "final_loss": 0.5795014902301456,
+  "threshold": 6.849761962890625,
+  "threshold_method": "percentile",
+  "error_mean": 0.5755003690719604,
+  "error_std": 1.200560212135315,
+  "error_p50": 0.2948067784309387,
+  "error_p95": 1.4641284942626953,
+  "error_p99": 3.4828505516052246
+}
