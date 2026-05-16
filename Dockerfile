@@ -8,11 +8,6 @@ LABEL maintainer="UBA-ITD" \
 
 WORKDIR /app
 
-# System dependencies (minimal)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
 # Install Python deps first (layer caching)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -21,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY config.yaml .
 COPY src/ ./src/
 COPY data/ ./data/
-COPY models/ ./models/
+RUN mkdir -p ./models/lstm ./models/baseline ./models/hybrid
 COPY tests/ ./tests/
 
 # Expose API port
