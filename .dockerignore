@@ -8,10 +8,6 @@ venv/
 .git/
 *.egg-info/
 
-# Large data files (mounted via volume instead)
-data/
-models/
-
 # IDE and OS
 .vscode/
 .idea/

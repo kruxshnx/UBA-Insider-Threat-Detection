@@ -17,7 +17,6 @@ COPY config.yaml .
 COPY src/ ./src/
 COPY data/ ./data/
 RUN mkdir -p ./models/lstm ./models/baseline ./models/hybrid
-COPY tests/ ./tests/
 
 # Expose API port
 EXPOSE 8000
