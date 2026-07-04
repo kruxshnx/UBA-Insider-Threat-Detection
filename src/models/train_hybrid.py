@@ -43,6 +43,11 @@ os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
 # ── Config-driven constants ──────────────────────────────────────────────────
 FEATURE_COLS = ['far', 'eds', 'iav', 'oaf', 'login_entropy', 'file_count', 'email_count']
 
+# ── Reproducibility ──────────────────────────────────────────────────────────
+RANDOM_SEED = 42
+np.random.seed(RANDOM_SEED)
+torch.manual_seed(RANDOM_SEED)
+
 
 def _get_ground_truth_config() -> dict:
     """
@@ -76,13 +81,19 @@ def load_data():
     days = np.array(df_raw['day'])
 
     # ── Ground truth from config ──────────────────────────────────────────
+    # Compare real datetimes, not raw strings: parse the 'day' column and the
+    # configured start day to Timestamps and flag the malicious user on/after
+    # that day. (String-vs-string comparison silently breaks for any date
+    # format that isn't zero-padded ISO-8601.)
     gt = _get_ground_truth_config()
+    day_dates = pd.to_datetime(df_raw['day'], errors='coerce')
+    start_day = pd.to_datetime(gt['malicious_start_day'])
     labels = np.zeros(len(users), dtype=int)
-    mask = (users == gt['malicious_user']) & (days > gt['malicious_start_day'])
+    mask = (users == gt['malicious_user']) & (day_dates >= start_day).to_numpy()
     labels[mask] = 1
 
     logger.info(
-        "Ground truth: user=%s after %s → %d malicious instances out of %d total",
+        "Ground truth: user=%s on/after %s → %d malicious instances out of %d total",
         gt['malicious_user'], gt['malicious_start_day'], np.sum(labels), len(labels),
     )
 
@@ -220,7 +231,10 @@ def train_pipeline():
                 for X_batch, y_batch in train_loader:
                     optimizer.zero_grad()
                     outputs, attn = model(X_batch)
-                    loss = criterion(outputs, y_batch.squeeze())
+                    # squeeze(-1) only drops the trailing size-1 label dim,
+                    # yielding shape [batch]; a bare squeeze() would collapse a
+                    # batch of size 1 to a 0-d scalar and crash CrossEntropyLoss.
+                    loss = criterion(outputs, y_batch.squeeze(-1))
                     loss.backward()
                     optimizer.step()
                     total_loss += loss.item()
@@ -239,7 +253,7 @@ def train_pipeline():
                     outputs, attn = model(X_batch)
                     preds = outputs.argmax(dim=1)
                     all_preds.extend(preds.numpy())
-                    all_labels.extend(y_batch.squeeze().numpy())
+                    all_labels.extend(y_batch.squeeze(-1).numpy())
 
             logger.info("Bi-LSTM Test Report:\n%s",
                          classification_report(all_labels, all_preds,

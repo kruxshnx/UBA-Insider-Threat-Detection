@@ -28,7 +28,7 @@ class Config:
     def _load_config(self) -> None:
         """Load configuration from YAML file."""
         if os.path.exists(CONFIG_PATH):
-            with open(CONFIG_PATH, 'r') as f:
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
                 self._config = yaml.safe_load(f)
         else:
             print(f"Warning: Config file not found at {CONFIG_PATH}. Using defaults.")
@@ -132,7 +132,32 @@ class Config:
     @property
     def api(self) -> Dict[str, Any]:
         return self.get('api', {})
-    
+
+    @property
+    def data_generation(self) -> Dict[str, Any]:
+        return self.get('data_generation', {})
+
+    @property
+    def evaluation(self) -> Dict[str, Any]:
+        return self.get('evaluation', {})
+
+    @property
+    def entropy_mapping(self) -> Dict[str, Any]:
+        return self.get('entropy_mapping', {})
+
+    @property
+    def telemetry(self) -> Dict[str, Any]:
+        return self.get('telemetry', {})
+
+    @property
+    def baseline_drift(self) -> Dict[str, Any]:
+        return self.get('baseline_drift', {})
+
+    @property
+    def behavioral_biometrics(self) -> Dict[str, Any]:
+        """Behavioral biometrics config (nested under features)."""
+        return self.get('features', {}).get('behavioral_biometrics', {})
+
     def get_full_path(self, path_key: str) -> str:
         """Get full absolute path for a path config key."""
         relative_path = self.paths.get(path_key, '')

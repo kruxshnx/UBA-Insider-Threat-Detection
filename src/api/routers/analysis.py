@@ -3,10 +3,9 @@ Analysis router — per-user risk history, SHAP explanations, and analyst feedba
 Uses centralised settings instead of hardcoded paths.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 import pandas as pd
-import numpy as np
 import os
 import joblib
 import hashlib
@@ -14,18 +13,57 @@ import logging
 from datetime import datetime
 
 from src.api.config import settings
-from src.risk_engine.bayesian_network import bayesian_network, nonlinear_aggregator
-from src.models.thresholding import adaptive_threshold, drift_detector
-from src.security.privacy import pseudonymization, access_control, cryptographic_erasure
-from src.deployment.operations import shadow_deployment, synthetic_generator
+from src.api.security import require_role
+
+logger = logging.getLogger("uba.analysis")
+
+# =============================================================================
+# OPTIONAL / HEAVY DEPENDENCIES (best-effort imports)
+# =============================================================================
+# Each of these pulls in optional third-party libs (shap, xgboost, torch,
+# cryptography, pgmpy, ...). If any fails to import — e.g. `cryptography` is
+# momentarily absent while a teammate installs it — we degrade the affected
+# feature (its endpoint returns 503) instead of taking down the whole app.
+# The names are set to None on failure and guarded at call sites.
+
+try:
+    from src.risk_engine.bayesian_network import bayesian_network
+except Exception as e:  # pragma: no cover - environment dependent
+    bayesian_network = None
+    logger.warning("bayesian_network unavailable — risk-distribution disabled: %s", e)
+
+try:
+    from src.models.thresholding import adaptive_threshold, drift_detector
+except Exception as e:
+    adaptive_threshold = None
+    drift_detector = None
+    logger.warning("thresholding unavailable — drift/threshold degraded: %s", e)
+
+try:
+    from src.security.privacy import (
+        pseudonymization,
+        access_control,
+        cryptographic_erasure,
+    )
+except Exception as e:
+    pseudonymization = None
+    access_control = None
+    cryptographic_erasure = None
+    logger.warning("privacy module unavailable (crypto?) — privacy features disabled: %s", e)
+
+try:
+    from src.deployment.operations import shadow_deployment, synthetic_generator
+except Exception as e:
+    shadow_deployment = None
+    synthetic_generator = None
+    logger.warning("deployment.operations unavailable — synthetic generator disabled: %s", e)
 
 # SHAP explainer (best-effort import)
 try:
     from src.models.explainability import SHAPExplainer
-except ImportError:
+except Exception as e:
     SHAPExplainer = None
-
-logger = logging.getLogger("uba.analysis")
+    logger.warning("SHAPExplainer unavailable — explainability disabled: %s", e)
 
 router = APIRouter()
 
@@ -90,7 +128,7 @@ async def get_user_risk(user_id: str):
         raise HTTPException(status_code=404, detail="Feature data source not found.")
 
     try:
-        df = pd.read_csv(DATA_PATH)
+        df = pd.read_csv(DATA_PATH, encoding="utf-8")
         user_df = df[df["user"] == user_id].copy()
 
         if user_df.empty:
@@ -155,7 +193,7 @@ async def explain_risk(user_id: str, date: str):
         )
 
     try:
-        df = pd.read_csv(DATA_PATH)
+        df = pd.read_csv(DATA_PATH, encoding="utf-8")
         df["day_str"] = df["day"].astype(str)
 
         row = df[(df["user"] == user_id) & (df["day_str"] == date)]
@@ -186,7 +224,7 @@ async def submit_feedback(feedback: FeedbackRequest):
     try:
         new_row = pd.DataFrame([feedback.model_dump()])
         header = not os.path.exists(feedback_path)
-        new_row.to_csv(feedback_path, mode="a", header=header, index=False)
+        new_row.to_csv(feedback_path, mode="a", header=header, index=False, encoding="utf-8")
         logger.info("Feedback received: user=%s day=%s fp=%s", feedback.user_id, feedback.day, feedback.is_false_positive)
         return {"status": "success", "message": "Feedback recorded."}
     except Exception as e:
@@ -216,6 +254,11 @@ async def calculate_risk_distribution(request: RiskDistributionRequest):
     Returns probability distribution instead of point estimate,
     providing uncertainty quantification.
     """
+    if bayesian_network is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Bayesian risk engine is not available in this deployment.",
+        )
     try:
         row = pd.Series({
             'user': request.user_id,
@@ -241,77 +284,176 @@ async def calculate_risk_distribution(request: RiskDistributionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Drift/threshold columns produced by the risk pipeline in risk_report_users.csv.
+USERS_REPORT_PATH = os.path.join(settings.RISK_OUTPUT_DIR, "risk_report_users.csv")
+
+
 @router.get("/analysis/drift-status")
 async def check_concept_drift():
     """
-    Check if current data shows concept drift from training distribution.
+    Report concept-drift status derived from the risk pipeline's real output.
+
+    Reads the ``is_drift`` / ``deviation_sigma`` / ``drift_explanation`` columns
+    that the risk pipeline writes to ``risk_report_users.csv`` and summarises
+    how many users are currently drifting. Returns a typed empty response
+    (``drift_detected=False``, ``data_source="unavailable"``) if the file or the
+    columns are missing — it never fabricates data and never 500s on missing
+    input.
     """
+    empty = {
+        "status": "success",
+        "data_source": "unavailable",
+        "drift_detected": False,
+        "users_total": 0,
+        "users_in_drift": 0,
+        "drift_ratio": 0.0,
+        "max_deviation_sigma": 0.0,
+        "top_drifting_users": [],
+        "recommendation": "No drift report available. Run the risk pipeline to populate risk_report_users.csv.",
+    }
+
+    if not os.path.exists(USERS_REPORT_PATH):
+        return empty
+
     try:
-        # Load recent anomaly scores (simulated for now)
-        recent_scores = np.random.normal(0.2, 0.1, 500)
-        
-        result = drift_detector.detect_drift(recent_scores)
-        
-        return {
-            "status": "success",
-            "drift_detected": result['drift_detected'],
-            "confidence": result['confidence'],
-            "metrics": result['metrics'],
-            "recommendation": result['recommendation']
-        }
-    
+        df = pd.read_csv(USERS_REPORT_PATH, encoding="utf-8")
     except Exception as e:
-        logger.exception("Drift detection failed")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.warning("Could not read %s: %s", USERS_REPORT_PATH, e)
+        return empty
+
+    if df.empty or "is_drift" not in df.columns:
+        return empty
+
+    # Normalise the boolean-ish is_drift column.
+    is_drift = df["is_drift"].astype(str).str.strip().str.lower().isin(
+        {"true", "1", "yes"}
+    )
+    users_total = int(len(df))
+    users_in_drift = int(is_drift.sum())
+
+    sigma = pd.to_numeric(df.get("deviation_sigma", 0), errors="coerce").fillna(0.0)
+    max_sigma = float(sigma.max()) if len(sigma) else 0.0
+
+    drifting = df[is_drift].copy()
+    drifting = drifting.assign(_sigma=pd.to_numeric(
+        drifting.get("deviation_sigma", 0), errors="coerce"
+    ).fillna(0.0)).sort_values("_sigma", ascending=False)
+
+    top = []
+    for _, row in drifting.head(10).iterrows():
+        top.append({
+            "user": str(row.get("user", "")),
+            "total_risk_score": round(float(pd.to_numeric(row.get("total_risk_score", 0), errors="coerce") or 0), 2),
+            "deviation_sigma": round(float(row.get("_sigma", 0)), 2),
+            "explanation": str(row.get("drift_explanation", "")) if pd.notna(row.get("drift_explanation", "")) else "",
+        })
+
+    return {
+        "status": "success",
+        "data_source": "risk_report_users.csv",
+        "drift_detected": users_in_drift > 0,
+        "users_total": users_total,
+        "users_in_drift": users_in_drift,
+        "drift_ratio": round(users_in_drift / users_total, 4) if users_total else 0.0,
+        "max_deviation_sigma": round(max_sigma, 2),
+        "top_drifting_users": top,
+        "recommendation": (
+            f"{users_in_drift} of {users_total} users are drifting from baseline. "
+            "Review the top drifting users and consider retraining."
+            if users_in_drift else
+            "No users are currently drifting from baseline."
+        ),
+    }
 
 
-@router.post("/analysis/update-threshold")
+@router.post("/analysis/update-threshold", dependencies=[Depends(require_role("Admin", "Analyst"))])
 async def update_threshold(method: str = "percentile"):
     """
-    Update anomaly detection threshold using adaptive method.
-    
-    Methods: percentile, evt, cost, iqr, std
+    Recompute an adaptive anomaly threshold over the pipeline's real risk scores.
+
+    Runs the adaptive-threshold algorithm over the ``total_risk_score`` column
+    of ``risk_report_users.csv`` (the risk pipeline's real output) rather than
+    fabricated numbers. Requires Admin/Analyst (demo RBAC).
+
+    Methods: percentile, evt, cost, iqr, std.
+
+    If the thresholding module or the report is unavailable, returns a clearly
+    labelled ``data_source`` so the caller never mistakes a fallback for a real
+    computation.
     """
+    if adaptive_threshold is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Adaptive thresholding module is not available in this deployment.",
+        )
+
+    scores = None
+    data_source = "unavailable"
+    if os.path.exists(USERS_REPORT_PATH):
+        try:
+            df = pd.read_csv(USERS_REPORT_PATH, encoding="utf-8")
+            if "total_risk_score" in df.columns and not df.empty:
+                scores = pd.to_numeric(
+                    df["total_risk_score"], errors="coerce"
+                ).dropna().to_numpy()
+                data_source = "risk_report_users.csv"
+        except Exception as e:
+            logger.warning("Could not read scores from %s: %s", USERS_REPORT_PATH, e)
+
+    if scores is None or len(scores) == 0:
+        raise HTTPException(
+            status_code=404,
+            detail="No risk scores available to compute a threshold. Run the risk pipeline first.",
+        )
+
     try:
-        scores = np.random.normal(0.2, 0.1, 1000)  # Simulated
         result = adaptive_threshold.calculate_threshold(scores, method=method)
-        
         return {
             "status": "success",
+            "data_source": data_source,
+            "sample_size": int(len(scores)),
             "threshold": result.threshold,
             "method": result.method,
             "confidence": result.confidence,
-            "metadata": result.metadata
+            "metadata": result.metadata,
         }
-    
     except Exception as e:
         logger.exception("Threshold update failed")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/synthetic/generate")
+@router.post("/synthetic/generate", dependencies=[Depends(require_role("Admin", "Analyst"))])
 async def generate_synthetic_data(
     scenario: str = "data_exfiltration",
     intensity: float = 1.0,
     n_samples: int = 100
 ):
     """
-    Generate synthetic threat scenario data.
+    Generate synthetic threat scenario data (clearly labelled as synthetic).
+
+    Requires Admin/Analyst (demo RBAC). Returns 503 if the synthetic generator
+    module is unavailable in this deployment.
     """
+    if synthetic_generator is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Synthetic data generator is not available in this deployment.",
+        )
     try:
         synthetic = synthetic_generator._create_synthetic_events(
             scenario=scenario,
             user_id="synthetic_user",
             intensity=intensity
         )
-        
+
         return {
             "status": "success",
+            "synthetic": True,
             "scenario": scenario,
             "event_count": len(synthetic),
             "events": synthetic.to_dict(orient='records') if len(synthetic) > 0 else []
         }
-    
+
     except Exception as e:
         logger.exception("Synthetic data generation failed")
         raise HTTPException(status_code=500, detail=str(e))

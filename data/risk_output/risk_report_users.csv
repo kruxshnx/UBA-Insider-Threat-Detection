@@ -1,101 +1,101 @@
 user,total_risk_score,max_risk,event_count,is_drift,deviation_sigma,drift_explanation
-U173,183.46875997991438,100.0,28,True,39.887579070968116,"Risk 183.5 exceeds baseline (avg=99.4, +39.9σ)"
-U112,179.26454620201213,100.0,26,True,79.26454620201213,Unusual activity (baseline avg=100.0)
-U153,175.39783196997644,100.0,26,True,75.39783196997644,Unusual activity (baseline avg=100.0)
-U150,175.11265216291213,100.0,26,True,75.11265216291213,Unusual activity (baseline avg=100.0)
-U143,172.25972600907642,100.0,25,True,72.25972600907642,Unusual activity (baseline avg=100.0)
-U111,170.75877965610644,100.0,24,True,70.75877965610644,Unusual activity (baseline avg=100.0)
-U134,167.268736005432,100.0,24,True,4.902602416120843,"Risk 167.3 exceeds baseline (avg=94.9, +4.9σ)"
-U155,165.11265216291213,100.0,25,True,65.11265216291213,Unusual activity (baseline avg=100.0)
-U162,163.89688561700643,100.0,24,True,63.89688561700643,Unusual activity (baseline avg=100.0)
-U167,163.4754925549821,100.0,25,True,63.47549255498211,Unusual activity (baseline avg=100.0)
-U135,163.4754925549821,100.0,25,True,63.47549255498211,Unusual activity (baseline avg=100.0)
-U114,162.9396769003527,100.0,24,True,3.5072310223616854,"Risk 162.9 exceeds baseline (avg=86.5, +3.5σ)"
-U188,162.25972600907642,100.0,24,True,62.25972600907642,Unusual activity (baseline avg=100.0)
-U123,162.25972600907642,100.0,24,True,62.25972600907642,Unusual activity (baseline avg=100.0)
-U104,161.97454620201214,100.0,24,True,61.974546202012135,Unusual activity (baseline avg=100.0)
-U196,160.93124997289152,100.0,24,True,12.086012229724407,"Risk 160.9 exceeds baseline (avg=97.9, +12.1σ)"
-U169,160.76879615850254,100.0,24,True,14.983301461797799,"Risk 160.8 exceeds baseline (avg=98.7, +15.0σ)"
-U192,160.75877965610644,100.0,23,True,60.75877965610644,Unusual activity (baseline avg=100.0)
-U107,160.75877965610644,100.0,23,True,60.75877965610644,Unusual activity (baseline avg=100.0)
-U101,160.75877965610644,100.0,23,True,60.75877965610644,Unusual activity (baseline avg=100.0)
-U189,160.75877965610644,100.0,23,True,60.75877965610644,Unusual activity (baseline avg=100.0)
-U152,160.75877965610644,100.0,23,True,60.75877965610644,Unusual activity (baseline avg=100.0)
-U172,160.75877965610644,100.0,23,True,60.75877965610644,Unusual activity (baseline avg=100.0)
-U171,160.75877965610644,100.0,23,True,60.75877965610644,Unusual activity (baseline avg=100.0)
-U174,160.75877965610644,100.0,23,True,60.75877965610644,Unusual activity (baseline avg=100.0)
-U194,160.75877965610644,100.0,23,True,60.75877965610644,Unusual activity (baseline avg=100.0)
-U193,160.6566014752014,100.0,23,True,31.414864819415477,"Risk 160.7 exceeds baseline (avg=99.5, +31.4σ)"
-U109,160.56143719243784,100.0,23,True,22.358014534191575,"Risk 160.6 exceeds baseline (avg=99.2, +22.4σ)"
-U182,159.9577496260456,100.0,23,True,13.772860195804432,"Risk 160.0 exceeds baseline (avg=97.4, +13.8σ)"
-U115,159.70411811825593,100.0,23,True,3.2466578942132673,"Risk 159.7 exceeds baseline (avg=94.4, +3.2σ)"
-U105,159.62384833384473,100.0,23,True,5.159194355652741,"Risk 159.6 exceeds baseline (avg=96.1, +5.2σ)"
-U145,159.44759867243286,100.0,23,True,5.8230746955900665,"Risk 159.4 exceeds baseline (avg=94.7, +5.8σ)"
-U168,159.2197977969567,100.0,24,True,2.1553755440018154,"Risk 159.2 exceeds baseline (avg=86.2, +2.2σ)"
-U121,159.1426834497498,100.0,23,True,5.029027247649014,"Risk 159.1 exceeds baseline (avg=93.3, +5.0σ)"
-U180,159.12434055454244,100.0,24,True,6.254573634884203,"Risk 159.1 exceeds baseline (avg=95.6, +6.3σ)"
-U124,159.02501789493132,100.0,23,True,5.832253331268065,"Risk 159.0 exceeds baseline (avg=96.1, +5.8σ)"
-U199,158.78654579962657,100.0,23,True,4.326659116519146,"Risk 158.8 exceeds baseline (avg=91.8, +4.3σ)"
-U126,158.5677368820848,100.0,23,True,11.21375478922034,"Risk 158.6 exceeds baseline (avg=98.2, +11.2σ)"
-U187,158.4089556320452,100.0,23,True,4.994276111409918,"Risk 158.4 exceeds baseline (avg=92.7, +5.0σ)"
-U191,158.3950487934644,100.0,23,True,7.1610069166152,"Risk 158.4 exceeds baseline (avg=96.9, +7.2σ)"
-U175,157.98117549580635,100.0,23,True,3.3700678292898294,"Risk 158.0 exceeds baseline (avg=88.7, +3.4σ)"
-U146,157.31982713717957,100.0,23,True,3.524229840655878,"Risk 157.3 exceeds baseline (avg=87.0, +3.5σ)"
-U164,157.259844257796,100.0,23,True,6.030610383237363,"Risk 157.3 exceeds baseline (avg=97.2, +6.0σ)"
-U130,157.03603758599778,100.0,23,True,5.642591272916429,"Risk 157.0 exceeds baseline (avg=97.0, +5.6σ)"
-U120,156.86831071402253,100.0,24,True,3.285958685126349,"Risk 156.9 exceeds baseline (avg=69.2, +3.3σ)"
-U117,156.78126180587344,100.0,23,True,5.2218128966268225,"Risk 156.8 exceeds baseline (avg=91.2, +5.2σ)"
-U183,156.52809610866188,100.0,23,True,9.503184859426396,"Risk 156.5 exceeds baseline (avg=95.9, +9.5σ)"
-U119,156.13724133348947,100.0,23,True,3.9146371777390905,"Risk 156.1 exceeds baseline (avg=89.8, +3.9σ)"
-U103,155.71557771972007,100.0,23,True,2.8403095143327115,"Risk 155.7 exceeds baseline (avg=87.9, +2.8σ)"
-U166,154.83976065994483,100.0,23,True,6.028231852472957,"Risk 154.8 exceeds baseline (avg=88.3, +6.0σ)"
-U185,154.75565099733348,100.0,23,True,6.015265109862249,"Risk 154.8 exceeds baseline (avg=90.3, +6.0σ)"
-U177,154.37902850939065,100.0,23,True,3.9171147085089766,"Risk 154.4 exceeds baseline (avg=82.1, +3.9σ)"
-U149,154.3602379228247,100.0,23,True,6.38885030144917,"Risk 154.4 exceeds baseline (avg=93.5, +6.4σ)"
-U151,154.3546772065057,100.0,23,True,5.990091643186048,"Risk 154.4 exceeds baseline (avg=92.8, +6.0σ)"
-U133,153.3419032235964,100.0,24,True,3.828773457514991,"Risk 153.3 exceeds baseline (avg=92.2, +3.8σ)"
-U161,152.06135501241656,100.0,24,True,3.2932632016982484,"Risk 152.1 exceeds baseline (avg=84.2, +3.3σ)"
-U125,151.69635855969915,100.0,23,True,5.036007812487294,"Risk 151.7 exceeds baseline (avg=90.7, +5.0σ)"
-U140,151.6539197760268,100.0,23,True,4.93323237233455,"Risk 151.7 exceeds baseline (avg=86.6, +4.9σ)"
-U138,151.10367833232425,100.0,23,True,4.140471012999236,"Risk 151.1 exceeds baseline (avg=91.1, +4.1σ)"
-U128,150.6036041387648,100.0,23,True,3.7738166671513818,"Risk 150.6 exceeds baseline (avg=90.7, +3.8σ)"
-U106,149.8988813733783,100.0,23,True,4.799989969719973,"Risk 149.9 exceeds baseline (avg=79.9, +4.8σ)"
-U157,149.83209184996917,100.0,23,True,6.558884910414881,"Risk 149.8 exceeds baseline (avg=82.8, +6.6σ)"
-U190,149.5386333104095,100.0,23,True,3.1404961455189646,"Risk 149.5 exceeds baseline (avg=85.1, +3.1σ)"
-U139,149.5302087855733,100.0,23,True,3.564233067689391,"Risk 149.5 exceeds baseline (avg=89.5, +3.6σ)"
-U156,149.46271907807252,100.0,23,True,4.257153845733159,"Risk 149.5 exceeds baseline (avg=73.5, +4.3σ)"
-U113,148.64683270594736,100.0,23,True,3.612710120412767,"Risk 148.6 exceeds baseline (avg=88.1, +3.6σ)"
-U116,148.20015457347222,100.0,23,True,3.1887127171976157,"Risk 148.2 exceeds baseline (avg=84.8, +3.2σ)"
-U198,147.65748890024773,100.0,23,True,4.466071423961857,"Risk 147.7 exceeds baseline (avg=82.7, +4.5σ)"
-U178,147.04813465045987,100.0,23,True,2.8962805315683093,"Risk 147.0 exceeds baseline (avg=69.9, +2.9σ)"
-U131,146.7821840327988,100.0,23,True,4.34405599890413,"Risk 146.8 exceeds baseline (avg=80.7, +4.3σ)"
-U137,146.50098779132995,100.0,23,True,2.3853353850824344,"Risk 146.5 exceeds baseline (avg=60.0, +2.4σ)"
-U141,146.40297334975347,100.0,23,True,3.1138517726505923,"Risk 146.4 exceeds baseline (avg=83.6, +3.1σ)"
-U110,146.36861829012588,100.0,23,True,5.253915439860089,"Risk 146.4 exceeds baseline (avg=80.2, +5.3σ)"
-U127,146.21923882104224,100.0,23,True,5.863945918261308,"Risk 146.2 exceeds baseline (avg=76.6, +5.9σ)"
-U195,145.53939339014136,100.0,23,True,2.3643321283565246,"Risk 145.5 exceeds baseline (avg=86.4, +2.4σ)"
-U197,145.13569186872527,100.0,23,True,3.812054909892498,"Risk 145.1 exceeds baseline (avg=75.7, +3.8σ)"
-U144,143.78337397695464,100.0,23,True,2.791085227159938,"Risk 143.8 exceeds baseline (avg=79.0, +2.8σ)"
-U181,143.7092808137944,100.0,23,True,3.083295888858924,"Risk 143.7 exceeds baseline (avg=63.7, +3.1σ)"
-U186,143.55878652893412,100.0,23,True,3.9196536691553274,"Risk 143.6 exceeds baseline (avg=78.7, +3.9σ)"
-U160,142.15781938139153,100.0,23,True,2.3629512700011253,"Risk 142.2 exceeds baseline (avg=81.7, +2.4σ)"
-U163,142.08246923017646,100.0,23,True,2.780648385956248,"Risk 142.1 exceeds baseline (avg=67.5, +2.8σ)"
-U159,139.36655283147263,100.0,23,True,2.6881312573736613,"Risk 139.4 exceeds baseline (avg=69.7, +2.7σ)"
-U100,139.3308921838887,96.13814815878865,23,True,4.562369851697527,"Risk 139.3 exceeds baseline (avg=66.8, +4.6σ)"
-U118,137.80212688978747,100.0,23,True,2.5806649634480183,"Risk 137.8 exceeds baseline (avg=74.5, +2.6σ)"
-U142,137.23607709513846,100.0,23,True,2.3326702240109918,"Risk 137.2 exceeds baseline (avg=73.2, +2.3σ)"
-U129,134.96509484735748,98.32944586873052,23,True,3.3873973415273166,"Risk 135.0 exceeds baseline (avg=65.6, +3.4σ)"
-U154,134.38147171719805,89.28727224469185,23,True,7.3973550355313575,"Risk 134.4 exceeds baseline (avg=74.7, +7.4σ)"
-U147,133.62235375164914,92.19098702073097,23,True,3.442716133686199,"Risk 133.6 exceeds baseline (avg=72.8, +3.4σ)"
-U102,131.93375203393657,100.0,23,True,3.3775307265690455,"Risk 131.9 exceeds baseline (avg=60.2, +3.4σ)"
-U158,125.45814735025766,100.0,23,False,1.814893525527941,Within 2.0σ of baseline
-U122,123.26812541401269,94.01798486709593,23,True,3.0423771308712024,"Risk 123.3 exceeds baseline (avg=57.6, +3.0σ)"
-U148,115.91908830066745,82.66826212406158,23,True,4.731724278573392,"Risk 115.9 exceeds baseline (avg=57.1, +4.7σ)"
-U132,115.77575307551295,91.69044211506844,23,True,3.14689515824685,"Risk 115.8 exceeds baseline (avg=24.6, +3.1σ)"
-U136,112.5780721858369,73.70295614004135,23,True,5.961984615396313,"Risk 112.6 exceeds baseline (avg=62.8, +6.0σ)"
-U170,107.72053429669587,77.0723582804203,23,True,3.3914670691570112,"Risk 107.7 exceeds baseline (avg=52.3, +3.4σ)"
-U179,107.30866170589951,87.75640144944191,23,True,2.0718792838706626,"Risk 107.3 exceeds baseline (avg=45.6, +2.1σ)"
-U108,83.40453777891557,72.5884535908699,23,True,2.329181677766256,"Risk 83.4 exceeds baseline (avg=26.9, +2.3σ)"
-U184,83.26508309239844,59.88694220781326,23,True,4.376013003229965,"Risk 83.3 exceeds baseline (avg=38.6, +4.4σ)"
-U165,81.33188040340306,57.59083718061447,23,True,5.483568943104228,"Risk 81.3 exceeds baseline (avg=40.8, +5.5σ)"
-U176,70.61900978510499,48.709774911403656,23,True,2.602244112138937,"Risk 70.6 exceeds baseline (avg=30.2, +2.6σ)"
+U105,146.85590000000002,100.0,26,True,100.0,Recent daily risk 100.0 >> baseline avg=0.0 (low-variance user)
+U180,70.10457492725934,68.17349506164439,25,False,-0.4082360885918805,Within 2.0 sigma of baseline
+U169,63.70979225034591,54.392701818313945,26,False,-1.1096847786069883,Within 2.0 sigma of baseline
+U134,34.06364661139015,29.56564239852494,25,True,20.61727912684475,"Recent daily risk 29.6 exceeds baseline (avg=0.5, +20.6 sigma)"
+U107,30.79060988930435,25.845049633493897,25,False,-0.8036227054368411,Within 2.0 sigma of baseline
+U111,30.79046209975627,23.28874894754589,26,True,16.831424391187376,"Recent daily risk 23.3 exceeds baseline (avg=0.6, +16.8 sigma)"
+U162,30.2790997453692,27.044042175625783,24,False,-1.1223643619749204,Within 2.0 sigma of baseline
+U117,14.218861547016218,11.816375036537966,24,False,1.140216105596436,Within 2.0 sigma of baseline
+U150,14.02039954719223,11.59253280072378,27,False,1.4016771064969384,Within 2.0 sigma of baseline
+U155,13.641223458839061,10.129029378189,26,True,4.830340072036846,"Recent daily risk 10.1 exceeds baseline (avg=0.6, +4.8 sigma)"
+U109,11.382965494590904,10.48104747484128,23,False,-0.2266235681259389,Within 2.0 sigma of baseline
+U119,11.342551016395827,9.402455546984227,23,False,1.3689908536619886,Within 2.0 sigma of baseline
+U167,10.139908042165573,9.21090694119101,25,False,-0.967713027937247,Within 2.0 sigma of baseline
+U157,9.922550789326628,8.021330147317357,23,False,0.0,Within expected range (low variance user)
+U176,9.837739072298248,8.94339915663477,24,False,0.0,Within expected range (low variance user)
+U139,9.49689115406526,8.97420877140156,23,False,0.7075768507171156,Within 2.0 sigma of baseline
+U132,8.980199180261662,6.343739489371721,24,True,2.353869979278381,"Recent daily risk 6.3 exceeds baseline (avg=1.8, +2.4 sigma)"
+U158,8.629003065933238,8.246831655661321,23,False,-0.5182603128112263,Within 2.0 sigma of baseline
+U153,8.33114947219653,7.901054460071732,23,False,-0.6038634882178983,Within 2.0 sigma of baseline
+U140,6.6184881632407295,5.6749994593310795,24,True,2.886302115766336,"Recent daily risk 5.7 exceeds baseline (avg=1.4, +2.9 sigma)"
+U101,6.3610535995202655,5.525425175389675,24,False,0.0,Within expected range (low variance user)
+U197,6.26423295947132,4.70055533792884,23,False,0.0,Within expected range (low variance user)
+U193,6.113112083719733,4.6932347296748365,23,False,1.2572407283681608,Within 2.0 sigma of baseline
+U177,5.891602941182625,4.912874114758617,24,True,2.275902874461539,"Recent daily risk 4.9 exceeds baseline (avg=1.6, +2.3 sigma)"
+U152,5.512849597737078,5.293352275349759,23,False,-0.31102585319081727,Within 2.0 sigma of baseline
+U122,5.056171185986576,3.7028476762930524,24,False,0.0,Within expected range (low variance user)
+U126,4.668904039927103,3.9902238251900437,23,False,0.0,Within expected range (low variance user)
+U141,4.412761026672502,4.117316348467921,24,False,-0.6202355111468106,Within 2.0 sigma of baseline
+U188,4.285376452921186,4.122834392560739,25,False,-0.10496732305269572,Within 2.0 sigma of baseline
+U112,4.029693745221101,3.748046319040127,24,False,0.0,Within expected range (low variance user)
+U124,3.998350154384238,3.50339897266055,23,False,-0.9635854925706949,Within 2.0 sigma of baseline
+U161,3.8878104266355438,3.718427748479448,23,False,-0.5118759926608683,Within 2.0 sigma of baseline
+U131,3.8423131074752837,2.9807320275534663,23,False,0.0,Within expected range (low variance user)
+U138,3.5743132174360253,2.9299915459931145,23,False,1.0499867725581924,Within 2.0 sigma of baseline
+U173,3.382476957165613,3.22084926108648,25,False,-0.5170905110003404,Within 2.0 sigma of baseline
+U179,3.1293793683738835,2.7091755087645613,24,False,0.0,Within expected range (low variance user)
+U100,2.4098540144382565,2.1786357391648727,23,False,0.0,Within expected range (low variance user)
+U149,2.4027033527441537,2.234023820551545,23,False,0.0,Within expected range (low variance user)
+U135,0.624509312864058,0.6131475647026642,25,False,0.0,Within expected range (low variance user)
+U187,0.15376962391548304,0.1480344654173969,23,False,0.0,Within expected range (low variance user)
+U133,0.0,0.0,26,False,0.0,Within expected range (low variance user)
+U128,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U129,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U130,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U120,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U108,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U104,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U113,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U115,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U114,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U116,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U118,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U106,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U110,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U102,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U103,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U123,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U121,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U125,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U127,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U151,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U148,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U146,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U147,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U145,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U144,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U136,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U137,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U166,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U165,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U164,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U163,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U160,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U154,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U156,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U159,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U143,0.0,0.0,24,False,0.0,Within expected range (low variance user)
+U142,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U172,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U171,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U175,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U174,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U170,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U168,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U183,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U182,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U181,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U178,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U186,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U189,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U185,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U184,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U191,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U190,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U194,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U192,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U195,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U196,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U198,0.0,0.0,23,False,0.0,Within expected range (low variance user)
+U199,0.0,0.0,23,False,0.0,Within expected range (low variance user)

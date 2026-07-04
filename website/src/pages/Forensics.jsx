@@ -1,668 +1,803 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, ScatterChart, Scatter, ZAxis } from 'recharts'
-import { RefreshCw, Search, Clock, ShieldAlert, Tag, Send, CheckCircle2, MousePointer2, Keyboard, Activity, TrendingUp, Monitor, Mail } from 'lucide-react'
-import GlassCard from '../components/GlassCard'
-import RiskBadge from '../components/RiskBadge'
-import { GlowCard } from '../components/ui/spotlight-card'
-import { fetchUserProfile, fetchTimeline, submitAnalystFeedback, fetchUserHourlyActivity, fetchUsers } from '../services/api'
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+} from 'recharts'
+import {
+  RefreshCw, Search, Clock, ShieldAlert, Send, CheckCircle2, Activity,
+  Mail, User as UserIcon, Fingerprint, Crosshair, Sparkles, AlertTriangle,
+  ListTree, GitBranch, Info,
+} from 'lucide-react'
+import {
+  Card, Panel, SectionHeader, RiskBadge, Button,
+  EmptyState, LoadingState, Skeleton, ChartTooltip, axisProps,
+} from '../components/ui'
+import {
+  fetchRiskyUsers, fetchUsers, fetchUserProfile, fetchTimeline,
+  fetchUserRiskAnalysis, fetchRiskExplanation, fetchAlerts, submitAnalystFeedback,
+} from '../services/api'
+import { CHART, riskBand, riskColor, formatPercent } from '../lib/utils'
 
-const MITRE_TAGS = [
-  { tactic: 'TA0010', name: 'Exfiltration',        technique: 'T1052 Physical Medium' },
-  { tactic: 'TA0006', name: 'Credential Access',   technique: 'T1078 Valid Accounts' },
-  { tactic: 'TA0009', name: 'Collection',           technique: 'T1560 Archive Data' },
-  { tactic: 'TA0040', name: 'Impact',               technique: 'T1485 Data Destruction' },
-]
-
-const getRiskLevel = (score) => {
-  if (score >= 80) return 'critical'
-  if (score >= 60) return 'high'
-  if (score >= 40) return 'medium'
-  return 'low'
+// ── MITRE tactic labels (display names for real TA#### codes from event data) ──
+const MITRE_TACTIC_NAMES = {
+  TA0001: 'Initial Access', TA0002: 'Execution', TA0003: 'Persistence',
+  TA0004: 'Privilege Escalation', TA0005: 'Defense Evasion',
+  TA0006: 'Credential Access', TA0007: 'Discovery', TA0008: 'Lateral Movement',
+  TA0009: 'Collection', TA0010: 'Exfiltration', TA0011: 'Command & Control',
+  TA0040: 'Impact',
+}
+const MITRE_TECHNIQUE_NAMES = {
+  T1048: 'Exfil Over Alt Protocol', T1052: 'Exfil Over Physical Medium',
+  T1567: 'Exfil to Cloud Storage', T1560: 'Archive Collected Data',
+  T1119: 'Automated Collection', T1078: 'Valid Accounts', T1059: 'Command & Script',
+  T1562: 'Impair Defenses', T1555: 'Credential Store Theft', T1021: 'Remote Services',
+  T1485: 'Data Destruction',
 }
 
-const riskColor = (score) => {
-  if (score >= 80) return 'border-l-red-500'
-  if (score >= 60) return 'border-l-orange-400'
-  if (score >= 40) return 'border-l-yellow-400'
-  return 'border-l-green-500'
+// Human-readable labels for the pipeline's real risk-model features.
+const FEATURE_LABELS = {
+  far: 'File Access Rate',
+  eds: 'Email Domain Spread',
+  iav: 'Inter-Activity Variance',
+  oaf: 'Off-hours Activity Factor',
+  login_entropy: 'Login Entropy',
+  file_count: 'File Operations',
+  email_count: 'Emails Sent',
 }
 
-// Keystroke Dynamics Component
-function KeystrokeDynamics({ data = [] }) {
-  if (data.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-48 bg-surface-high rounded-lg border border-outline-variant/20">
-        <div className="text-text-muted text-sm">No keystroke data available</div>
-      </div>
-    )
-  }
+const relTime = (ts) => {
+  if (!ts) return '—'
+  const t = new Date(ts).getTime()
+  if (Number.isNaN(t)) return '—'
+  const diff = Math.floor((Date.now() - t) / 1000)
+  if (diff < 60) return `${diff}s ago`
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+  return new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
 
+const num = (v, digits = 1) => {
+  const n = Number(v)
+  return Number.isFinite(n) ? n.toFixed(digits) : '—'
+}
+
+// Colour helper for row accents keyed off a 0–100 score, via risk tokens.
+const scoreStripe = (score) => ({ borderLeftColor: riskColor(score) })
+
+// ── Small primitives ─────────────────────────────────────────────────────────
+function Metric({ label, value, sub, accentScore }) {
+  const color = accentScore != null ? riskColor(accentScore) : undefined
   return (
-    <GlowCard customSize glowColor="blue" className="p-6">
-      <div className="flex items-center gap-3 mb-4">
-        <div className="p-2 rounded-lg bg-blue-500/10">
-          <Keyboard size={18} className="text-blue-400" />
-        </div>
-        <div>
-          <h3 className="text-sm font-semibold text-on-surface">Keystroke Dynamics</h3>
-          <p className="text-xs text-text-muted">Flight time vs productivity analysis</p>
-        </div>
-      </div>
-      <div className="h-64">
-        <ResponsiveContainer width="100%" height="100%">
-          <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-            <XAxis
-              type="number"
-              dataKey="flight_time"
-              name="Flight Time (ms)"
-              label={{ value: 'Avg Flight Time (ms)', position: 'insideBottom', offset: -5, fill: '#9CA3AF', fontSize: 10 }}
-              stroke="#9CA3AF"
-              fontSize={10}
-            />
-            <YAxis
-              type="number"
-              dataKey="productivity"
-              name="Productivity"
-              label={{ value: 'Productivity Score', angle: -90, position: 'insideLeft', fill: '#9CA3AF', fontSize: 10 }}
-              stroke="#9CA3AF"
-              fontSize={10}
-              domain={[0, 100]}
-            />
-            <ZAxis type="number" dataKey="risk_score" range={[50, 400]} name="Risk Score" />
-            <Tooltip
-              cursor={{ strokeDasharray: '3 3' }}
-              content={({ active, payload }) => {
-                if (active && payload && payload.length) {
-                  const d = payload[0].payload
-                  return (
-                    <div className="bg-surface-lowest border border-outline-variant p-2 rounded text-xs">
-                      <div className="font-bold text-on-surface">{d.user}</div>
-                      <div className="text-text-muted">Flight: {d.flight_time.toFixed(1)}ms</div>
-                      <div className="text-text-muted">Productivity: {d.productivity.toFixed(0)}%</div>
-                      <div className="text-text-muted">Risk: {d.risk_score.toFixed(1)}</div>
-                    </div>
-                  )
-                }
-                return null
-              }}
-            />
-            <Scatter
-              name="Users"
-              data={data}
-              fill="#3B82F6"
-              shape={({ cx, cy, payload }) => {
-                const color = payload.risk_score > 80 ? '#ef4444' : payload.risk_score > 50 ? '#f59e0b' : '#10b981'
-                return <circle cx={cx} cy={cy} r={6} fill={color} stroke="#fff" strokeWidth={1} />
-              }}
-            />
-          </ScatterChart>
-        </ResponsiveContainer>
-      </div>
-    </GlowCard>
+    <div className="well p-3">
+      <p className="text-[0.65rem] uppercase tracking-wide text-on-surface-muted">{label}</p>
+      <p className="text-lg font-bold font-mono tabular-nums mt-0.5 text-on-surface" style={color ? { color } : undefined}>
+        {value}
+      </p>
+      {sub && <p className="text-[0.65rem] text-on-surface-muted mt-0.5">{sub}</p>}
+    </div>
   )
 }
 
-// Mouse Activity Heatmap — real telemetry data
-function MouseActivityHeatmap({ hourlyData = [] }) {
-  const hours = Array.from({ length: 24 }, (_, i) => i)
-  const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-
-  // Build 7x24 grid from real data
-  const grid = Array.from({ length: 7 }, () => Array(24).fill(null))
-  let maxRisk = 0
-  for (const d of hourlyData) {
-    const dow = d.day_of_week
-    const h = d.hour
-    if (dow >= 0 && dow < 7 && h >= 0 && h < 24) {
-      grid[dow][h] = d
-      if (d.avg_risk > maxRisk) maxRisk = d.avg_risk
+// ── Behavioral factor bars (real model features from daily history) ───────────
+function BehavioralFactors({ features }) {
+  const rows = useMemo(() => {
+    if (!features) return []
+    // Normalise each feature to a 0–100 bar for comparison. Ratios (0–1) scale
+    // by 100; counts scale relative to the max count in the set.
+    const ratioKeys = ['far', 'eds', 'iav', 'oaf', 'login_entropy']
+    const countKeys = ['file_count', 'email_count']
+    const maxCount = Math.max(1, ...countKeys.map((k) => Number(features[k]) || 0))
+    const out = []
+    for (const k of ratioKeys) {
+      if (features[k] == null) continue
+      const raw = Number(features[k]) || 0
+      out.push({ key: k, label: FEATURE_LABELS[k] || k, raw: num(raw, 3), pct: Math.min(100, Math.max(0, raw <= 1 ? raw * 100 : raw)) })
     }
-  }
+    for (const k of countKeys) {
+      if (features[k] == null) continue
+      const raw = Number(features[k]) || 0
+      out.push({ key: k, label: FEATURE_LABELS[k] || k, raw: String(Math.round(raw)), pct: (raw / maxCount) * 100 })
+    }
+    return out
+  }, [features])
 
-  const getCellColor = (cell) => {
-    if (!cell || cell.event_count === 0) return 'bg-surface-highest'
-    const r = cell.avg_risk
-    if (r >= 80) return 'bg-red-500/80'
-    if (r >= 60) return 'bg-orange-400/70'
-    if (r >= 40) return 'bg-amber-400/60'
-    return 'bg-emerald-500/50'
-  }
-
-  const hasData = hourlyData.length > 0
-
-  return (
-    <GlowCard customSize glowColor="purple" className="p-6">
-      <div className="flex items-center gap-3 mb-4">
-        <div className="p-2 rounded-lg bg-purple-500/10">
-          <MousePointer2 size={18} className="text-purple-400" />
-        </div>
-        <div>
-          <h3 className="text-sm font-semibold text-on-surface">Activity Heatmap</h3>
-          <p className="text-xs text-text-muted">{hasData ? 'Real telemetry · 7-day window' : 'No recent telemetry data'}</p>
-        </div>
-      </div>
-      {!hasData ? (
-        <div className="text-center py-8 text-text-muted text-xs">
-          No telemetry recorded for this user in the last 7 days
-        </div>
-      ) : (
-        <div className="overflow-x-auto">
-          <div className="min-w-[380px]">
-            <div className="flex mb-1 ml-10">
-              {hours.filter((_, i) => i % 4 === 0).map(h => (
-                <div key={h} className="flex-1 text-center text-[0.6rem] text-text-muted font-mono">{String(h).padStart(2,'0')}</div>
-              ))}
-            </div>
-            <div className="space-y-0.5">
-              {DAY_NAMES.map((day, di) => (
-                <div key={day} className="flex items-center gap-0.5">
-                  <div className="w-9 text-[0.65rem] text-text-muted flex-shrink-0">{day}</div>
-                  {hours.map(h => {
-                    const cell = grid[di][h]
-                    return (
-                      <div
-                        key={h}
-                        className={`flex-1 h-4 rounded-sm ${getCellColor(cell)}`}
-                        title={cell ? `${day} ${String(h).padStart(2,'0')}:00 — Risk: ${cell.avg_risk.toFixed(1)}, Events: ${cell.event_count}` : 'No data'}
-                      />
-                    )
-                  })}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-      <div className="flex items-center justify-center gap-4 mt-4 text-[0.65rem] text-text-muted">
-        {[['bg-surface-highest','No data'],['bg-emerald-500/50','Low'],['bg-amber-400/60','Medium'],['bg-orange-400/70','High'],['bg-red-500/80','Critical']].map(([cls, lbl]) => (
-          <div key={lbl} className="flex items-center gap-1">
-            <div className={`w-3 h-3 rounded ${cls}`} />
-            <span>{lbl}</span>
-          </div>
-        ))}
-      </div>
-    </GlowCard>
-  )
-}
-
-// Live Activity Feed — real telemetry events
-function LiveActivityFeed({ events = [] }) {
-  const relTime = (ts) => {
-    if (!ts) return '—'
-    const diff = Math.floor((Date.now() - new Date(ts).getTime()) / 60000)
-    if (diff < 1)  return 'Just now'
-    if (diff < 60) return `${diff}m ago`
-    return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  if (rows.length === 0) {
+    return <EmptyState icon={ListTree} title="No behavioral factors" description="No scored daily features exist for this user yet." className="py-8" />
   }
 
   return (
-    <GlowCard customSize glowColor="green" className="p-6">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <div className="p-2 rounded-lg bg-green-500/10">
-            <Activity size={18} className="text-green-400" />
+    <div className="space-y-2.5">
+      {rows.map((r) => (
+        <div key={r.key}>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs text-on-surface-variant">{r.label}</span>
+            <span className="text-xs font-mono tabular-nums text-on-surface">{r.raw}</span>
           </div>
-          <div>
-            <h3 className="text-sm font-semibold text-on-surface">Activity Timeline</h3>
-            <p className="text-xs text-text-muted">{events.length} telemetry events loaded</p>
+          <div className="track h-1.5">
+            <div className="track-fill" style={{ width: `${r.pct}%`, background: 'linear-gradient(90deg, var(--color-primary-dim), var(--color-primary))' }} />
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-          <span className="text-xs text-text-muted font-mono">LIVE</span>
-        </div>
-      </div>
-
-      <div className="space-y-1.5 max-h-80 overflow-y-auto pr-1">
-        {events.length === 0 ? (
-          <div className="text-center text-text-muted text-xs py-8">No telemetry events for this user</div>
-        ) : (
-          events.slice(0, 25).map((evt, idx) => {
-            const score = evt.risk_score || 0
-            const borderColor = score >= 80 ? 'border-red-500' : score >= 60 ? 'border-orange-400' : score >= 40 ? 'border-yellow-400' : 'border-green-500'
-            const bg = score >= 80 ? 'bg-red-500/10' : score >= 60 ? 'bg-orange-400/10' : score >= 40 ? 'bg-yellow-400/10' : 'bg-emerald-500/10'
-            return (
-              <div key={idx} className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs border-l-2 ${bg} ${borderColor}`}>
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-text-muted font-mono flex-shrink-0 text-[0.65rem]">{relTime(evt.timestamp)}</span>
-                  <Monitor size={11} className="text-on-surface-variant flex-shrink-0" />
-                  <span className="text-on-surface truncate max-w-[140px]">{evt.activity || 'Unknown'}</span>
-                </div>
-                <div className="flex items-center gap-2 flex-shrink-0 ml-2">
-                  {evt.is_anomaly && <span className="text-[0.6rem] bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded font-mono">ANOMALY</span>}
-                  <span className={`font-mono font-bold text-xs ${score >= 80 ? 'text-red-400' : score >= 60 ? 'text-orange-400' : score >= 40 ? 'text-yellow-400' : 'text-green-400'}`}>
-                    {score.toFixed(1)}
-                  </span>
-                </div>
-              </div>
-            )
-          })
-        )}
-      </div>
-    </GlowCard>
+      ))}
+    </div>
   )
 }
 
-// Main Forensics Component
+// ── SHAP explanation (real feature attributions; omitted gracefully) ──────────
+function ShapExplanation({ explanation }) {
+  const rows = useMemo(() => {
+    if (!explanation || typeof explanation !== 'object') return []
+    const entries = Object.entries(explanation)
+      .map(([k, v]) => ({ key: k, label: FEATURE_LABELS[k] || k, value: Number(v) || 0 }))
+      .filter((e) => Number.isFinite(e.value))
+    const max = Math.max(1e-9, ...entries.map((e) => Math.abs(e.value)))
+    return entries
+      .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+      .slice(0, 8)
+      .map((e) => ({ ...e, pct: (Math.abs(e.value) / max) * 100, positive: e.value >= 0 }))
+  }, [explanation])
+
+  if (rows.length === 0) return null
+
+  return (
+    <div className="space-y-2.5">
+      <p className="text-xs text-on-surface-muted">
+        Feature contributions to this day&apos;s score (SHAP).
+        <span className="text-error"> Red</span> pushes risk up,
+        <span className="text-success"> green</span> pulls it down.
+      </p>
+      {rows.map((r) => (
+        <div key={r.key}>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs text-on-surface-variant">{r.label}</span>
+            <span className="text-xs font-mono tabular-nums" style={{ color: r.positive ? CHART.risk.critical : CHART.risk.low }}>
+              {r.positive ? '+' : '−'}{Math.abs(r.value).toFixed(3)}
+            </span>
+          </div>
+          <div className="track h-1.5">
+            <div className="track-fill" style={{ width: `${r.pct}%`, background: r.positive ? CHART.risk.critical : CHART.risk.low }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
 export default function Forensics() {
-  const [searchParams] = useSearchParams()
-  const [allUsers, setAllUsers] = useState([])
-  const [selectedUser, setSelectedUser] = useState(null)
-  const [profile, setProfile] = useState(null)
-  const [timeline, setTimeline] = useState([])
-  const [hourlyData, setHourlyData] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [userLoading, setUserLoading] = useState(false)
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  const [users, setUsers] = useState([])          // merged risk-pipeline + live users
+  const [selectedId, setSelectedId] = useState(null)
   const [searchQuery, setSearchQuery] = useState('')
+
+  const [profile, setProfile] = useState(null)
+  const [history, setHistory] = useState([])      // daily risk history (pipeline)
+  const [timeline, setTimeline] = useState([])    // live telemetry events
+  const [mitre, setMitre] = useState([])          // real MITRE tactics for user
+  const [shap, setShap] = useState(null)          // SHAP explanation | null
+
+  const [listLoading, setListLoading] = useState(true)
+  const [userLoading, setUserLoading] = useState(false)
+  const [listError, setListError] = useState(false)
+  const [detailError, setDetailError] = useState(false)
+
   const [highRiskOnly, setHighRiskOnly] = useState(false)
   const [isFP, setIsFP] = useState(false)
   const [notes, setNotes] = useState('')
+  const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
-  const [keystrokeData, setKeystrokeData] = useState([])
 
+  // ── Load user roster (PRIMARY: risk pipeline; SECONDARY: live telemetry) ────
   useEffect(() => {
+    let cancelled = false
     const init = async () => {
-      const data = await fetchUsers()
-      const sorted = (data || []).sort((a, b) => (b.risk_score || 0) - (a.risk_score || 0))
-      setAllUsers(sorted)
-      const paramUser = searchParams.get('user')
-      const initialUser = paramUser && sorted.find(u => u.user_id === paramUser)
-        ? paramUser
-        : sorted.length ? sorted[0].user_id : null
-      if (initialUser) await selectUser(initialUser)
-      else setLoading(false)
+      setListLoading(true)
+      const [risky, live] = await Promise.all([
+        fetchRiskyUsers(200, 'desc'),
+        fetchUsers(true).catch(() => []),
+      ])
+      if (cancelled) return
+
+      const riskyArr = Array.isArray(risky) ? risky : []
+      const liveArr = Array.isArray(live) ? live : []
+      if (riskyArr.length === 0 && liveArr.length === 0) setListError(true)
+
+      const liveById = new Map(liveArr.map((u) => [u.user_id, u]))
+      // Base roster is the risk pipeline (always the full synthetic cohort).
+      const merged = riskyArr.map((u) => {
+        const id = u.user || u.user_id
+        const l = liveById.get(id) || {}
+        return {
+          id,
+          name: u.name || l.name || null,
+          role: u.role || l.role || 'Employee',
+          department: u.department || l.department || 'General',
+          score: Number(u.total_risk_score ?? l.risk_score ?? 0) || 0,
+          level: (u.risk_level || l.risk_level || riskBand(u.total_risk_score || 0)),
+          email: l.email || null,
+          eventCount: l.event_count ?? null,
+          lastApp: l.last_active_app && l.last_active_app !== '—' ? l.last_active_app : null,
+        }
+      })
+      // Add any live-only users not present in the pipeline roster.
+      const known = new Set(merged.map((m) => m.id))
+      for (const l of liveArr) {
+        if (known.has(l.user_id)) continue
+        merged.push({
+          id: l.user_id,
+          name: l.name || null,
+          role: l.role || 'Employee',
+          department: l.department || 'General',
+          score: Number(l.risk_score ?? 0) || 0,
+          level: l.risk_level || riskBand(l.risk_score || 0),
+          email: l.email || null,
+          eventCount: l.event_count ?? null,
+          lastApp: l.last_active_app && l.last_active_app !== '—' ? l.last_active_app : null,
+        })
+      }
+      merged.sort((a, b) => b.score - a.score)
+      setUsers(merged)
+
+      const param = searchParams.get('user')
+      const initial = (param && merged.find((m) => m.id === param)) ? param : (merged[0]?.id || null)
+      setSelectedId(initial)
+      setListLoading(false)
     }
     init()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const selectUser = async (userId) => {
-    setSelectedUser(userId)
-    setSubmitted(false)
-    setUserLoading(true)
-    setTimeline([])
-    setHourlyData([])
-    setKeystrokeData([])
+  // ── Load per-user detail whenever the selection changes ─────────────────────
+  useEffect(() => {
+    if (!selectedId) return
+    let cancelled = false
+    const load = async () => {
+      setUserLoading(true)
+      setDetailError(false)
+      setSubmitted(false)
+      setIsFP(false)
+      setNotes('')
+      setProfile(null); setHistory([]); setTimeline([]); setMitre([]); setShap(null)
 
-    const [p, t, h] = await Promise.all([
-      fetchUserProfile(userId),
-      fetchTimeline(userId, 200),
-      fetchUserHourlyActivity(userId),
-    ])
-    setProfile(p)
-    const evts = t?.events || []
-    setTimeline(evts)
-    setHourlyData(h?.data || [])
+      const [prof, analysis, tl, alertsRes] = await Promise.all([
+        fetchUserProfile(selectedId),
+        fetchUserRiskAnalysis(selectedId),
+        fetchTimeline(selectedId, 300),
+        fetchAlerts({ limit: 500 }),
+      ])
+      if (cancelled) return
 
-    const scatter = evts
-      .filter(e => e.details?.keystroke_flight_ms > 0)
-      .slice(0, 20)
-      .map(e => ({
-        user: userId,
-        flight_time: e.details.keystroke_flight_ms,
-        productivity: Math.min(100, Math.round((e.details?.productivity || 0) * 100)),
-        risk_score: e.risk_score || 0,
-      }))
-    setKeystrokeData(scatter)
-    setLoading(false)
-    setUserLoading(false)
-  }
+      if (!prof && !analysis) setDetailError(true)
+      setProfile(prof || null)
+
+      const hist = Array.isArray(analysis?.history) ? analysis.history : []
+      // history comes newest-first; keep chronological for the trend chart.
+      const chrono = [...hist].sort((a, b) => String(a.date).localeCompare(String(b.date)))
+      setHistory(chrono)
+
+      setTimeline(Array.isArray(tl?.events) ? tl.events : [])
+
+      // Derive real MITRE tactics for THIS user from alert data (dedup).
+      const userAlerts = (alertsRes?.alerts || []).filter((a) => (a.user || a.user_id) === selectedId)
+      const seen = new Set()
+      const tactics = []
+      for (const a of userAlerts) {
+        const t = a.mitre_tactic
+        if (!t || seen.has(t)) continue
+        seen.add(t)
+        tactics.push({ tactic: t, technique: a.mitre_technique || null })
+      }
+      setMitre(tactics)
+
+      // SHAP for the most-recent scored day (omit gracefully if unavailable).
+      const latest = chrono[chrono.length - 1]
+      if (latest?.date) {
+        const exp = await fetchRiskExplanation(selectedId, latest.date)
+        if (!cancelled) setShap(exp?.explanation || null)
+      }
+
+      if (!cancelled) setUserLoading(false)
+    }
+    load()
+    return () => { cancelled = true }
+  }, [selectedId])
+
+  const selectUser = useCallback((id) => {
+    setSelectedId(id)
+    const next = new URLSearchParams(searchParams)
+    next.set('user', id)
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
+
+  const filteredUsers = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return users
+    return users.filter((u) =>
+      u.id.toLowerCase().includes(q) || (u.name || '').toLowerCase().includes(q))
+  }, [users, searchQuery])
+
+  const selectedUser = useMemo(() => users.find((u) => u.id === selectedId) || null, [users, selectedId])
+
+  // Prefer profile score; fall back to roster score.
+  const riskScore = Number(profile?.total_risk_score ?? selectedUser?.score ?? 0) || 0
+  const level = riskBand(riskScore)
+
+  // Latest scored day → drives behavioral factors, SHAP date, feedback day.
+  const latestDay = history.length ? history[history.length - 1] : null
+
+  // Trend chart data (last 30 days of pipeline history).
+  const trendData = useMemo(() =>
+    history.slice(-30).map((h) => ({
+      date: String(h.date).slice(5),
+      score: Number(h.risk_score) || 0,
+    })), [history])
+
+  const filteredTimeline = useMemo(() =>
+    highRiskOnly ? timeline.filter((e) => (e.risk_score || 0) >= 50) : timeline,
+    [timeline, highRiskOnly])
+
+  const anomalyCount = useMemo(() => timeline.filter((e) => e.is_anomaly).length, [timeline])
 
   const handleSubmitFeedback = async () => {
-    if (!selectedUser) return
-    await submitAnalystFeedback({ userId: selectedUser, day: new Date().toISOString().split('T')[0], isFalsePositive: isFP, comments: notes })
-    setSubmitted(true)
+    if (!selectedId) return
+    setSubmitting(true)
+    const day = latestDay?.date || new Date().toISOString().split('T')[0]
+    const res = await submitAnalystFeedback({ userId: selectedId, day, isFalsePositive: isFP, comments: notes })
+    setSubmitting(false)
+    setSubmitted(res != null)
   }
 
-  const filteredUsers = allUsers.filter(u =>
-    u.user_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (u.name || '').toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  const displayName = profile?.name || selectedUser?.name || selectedId || 'User'
+  const initial = (displayName || 'U').charAt(0).toUpperCase()
 
-  const filteredTimeline = highRiskOnly
-    ? timeline.filter(e => (e.risk_score || 0) >= 50)
-    : timeline
-
-  // Build daily aggregated chart data from real timeline events
-  const dailyChartData = (() => {
-    if (!timeline.length) return []
-    const byDay = {}
-    for (const e of timeline) {
-      if (!e.timestamp) continue
-      const day = e.timestamp.split('T')[0]
-      if (!byDay[day]) byDay[day] = { scores: [], count: 0 }
-      byDay[day].scores.push(e.risk_score || 0)
-      byDay[day].count++
-    }
-    return Object.entries(byDay)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .slice(-30)
-      .map(([day, v]) => ({
-        day: day.slice(5),
-        score: parseFloat((v.scores.reduce((a, b) => a + b, 0) / v.scores.length).toFixed(1)),
-        events: v.count,
-      }))
-  })()
-
-  // Risk factor breakdown from real profile data
-  const riskFactors = profile ? [
-    { name: 'Role Weight',    value: profile.role === 'Admin' ? 85 : profile.role === 'Manager' ? 70 : profile.role === 'Contractor' ? 65 : 40 },
-    { name: 'Anomaly Rate',   value: timeline.length > 0 ? Math.round((timeline.filter(e => e.is_anomaly).length / timeline.length) * 100) : 0 },
-    { name: 'Peak Risk',      value: Math.round(profile.max_risk_score || 0) },
-    { name: 'Avg Risk Score', value: Math.round(profile.avg_risk_score || 0) },
-  ] : []
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <RefreshCw size={28} className="text-primary animate-spin" />
-      </div>
-    )
+  // ── Whole-page loading (initial roster) ─────────────────────────────────────
+  if (listLoading) {
+    return <LoadingState label="Loading forensic subjects…" className="h-96" />
   }
-
-  const anomalyCount = timeline.filter(e => e.is_anomaly).length
-
-  // Session stats from hourly data
-  const sessionStats = (() => {
-    if (!hourlyData.length) return null
-    const withData = hourlyData.filter(d => d.event_count > 0)
-    if (!withData.length) return null
-    const avgMouse = withData.reduce((s, d) => s + d.avg_mouse_velocity, 0) / withData.length
-    const avgFlight = withData.reduce((s, d) => s + d.avg_keystroke_flight_ms, 0) / withData.length
-    const totalSlots = withData.length
-    const peakHour = withData.reduce((max, d) => d.avg_risk > max.avg_risk ? d : max, withData[0])
-    return {
-      avgMouse: avgMouse.toFixed(1),
-      avgFlight: avgFlight.toFixed(0),
-      totalSlots,
-      peakHour: `${String(peakHour.hour).padStart(2,'0')}:00`,
-      peakRisk: peakHour.avg_risk.toFixed(1),
-    }
-  })()
-
-  const userObj = allUsers.find(u => u.user_id === selectedUser)
 
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* User Selector + Profile */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-        {/* User list */}
-        <GlassCard className="lg:col-span-1 p-4">
-          <p className="text-xs font-semibold text-on-surface mb-2">Employees ({allUsers.length})</p>
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <Fingerprint size={20} className="text-primary flex-shrink-0" />
+          <div className="min-w-0">
+            <h1 className="text-xl font-bold text-on-surface truncate">Forensic Investigation</h1>
+            <p className="text-xs text-on-surface-muted mt-0.5">
+              Deep-dive on a selected subject · {users.length} subjects in scope
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {listError && (
+        <div className="card border-error-container/50 bg-error-container/10 px-4 py-3 flex items-center gap-2.5 text-sm text-error">
+          <AlertTriangle size={16} className="flex-shrink-0" />
+          Backend unavailable — is the API running? Showing whatever data could be loaded.
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+        {/* ── Subject selector ───────────────────────────────────────────── */}
+        <Panel padding="p-4" className="lg:col-span-1 h-fit">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-on-surface">Subjects</h3>
+            <span className="text-[0.65rem] font-mono text-on-surface-muted">{filteredUsers.length}</span>
+          </div>
           <div className="relative mb-3">
-            <Search size={13} className="absolute left-3 top-2.5 text-text-muted" />
+            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-muted" />
             <input
-              type="text" placeholder="Search name or ID..."
-              value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
-              className="w-full bg-surface-lowest text-on-surface text-xs font-mono pl-8 pr-3 py-2 rounded-lg border border-outline-variant/20 focus:outline-none focus:border-primary/40"
+              type="text"
+              placeholder="Search name or ID…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="input w-full pl-8 font-mono text-xs"
+              aria-label="Search subjects"
             />
           </div>
-          <div className="space-y-0.5 max-h-64 overflow-y-auto">
-            {filteredUsers.map(u => {
-              const score = u.risk_score || 0
-              const dotColor = score >= 80 ? 'bg-red-500' : score >= 60 ? 'bg-orange-400' : score >= 40 ? 'bg-yellow-400' : 'bg-green-400'
+          <div className="space-y-1 max-h-[420px] overflow-y-auto pr-1">
+            {filteredUsers.length === 0 && (
+              <p className="text-xs text-on-surface-muted text-center py-6">No subjects match “{searchQuery}”.</p>
+            )}
+            {filteredUsers.map((u) => {
+              const active = u.id === selectedId
               return (
                 <button
-                  key={u.user_id}
-                  onClick={() => selectUser(u.user_id)}
-                  className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-all ${
-                    selectedUser === u.user_id
-                      ? 'bg-primary/10 text-primary border border-primary/20'
-                      : 'text-on-surface-variant hover:bg-surface-highest'
+                  key={u.id}
+                  onClick={() => selectUser(u.id)}
+                  aria-pressed={active}
+                  className={`w-full text-left px-3 py-2 rounded-md transition-colors border ${
+                    active
+                      ? 'bg-primary/10 border-primary/30'
+                      : 'bg-transparent border-transparent hover:bg-surface-high'
                   }`}
                 >
                   <div className="flex items-center gap-2">
-                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dotColor}`} />
-                    <span className="font-medium truncate">{u.name || u.user_id}</span>
-                    <span className="ml-auto font-mono text-[0.6rem] opacity-70">{score.toFixed(0)}</span>
+                    <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: riskColor(u.score) }} />
+                    <span className={`text-xs font-medium truncate ${active ? 'text-primary' : 'text-on-surface'}`}>
+                      {u.name || u.id}
+                    </span>
+                    <span className="ml-auto text-[0.65rem] font-mono tabular-nums text-on-surface-muted">
+                      {u.score.toFixed(0)}
+                    </span>
                   </div>
-                  <span className="block text-[0.6rem] text-text-muted ml-3.5">{u.user_id} · {u.role}</span>
+                  <span className="block text-[0.6rem] text-on-surface-muted font-mono mt-0.5 ml-3.5 truncate">
+                    {u.id} · {u.role}
+                  </span>
                 </button>
               )
             })}
           </div>
-        </GlassCard>
+        </Panel>
 
-        {/* Profile card */}
-        {userLoading ? (
-          <GlassCard className="lg:col-span-3 p-5 flex items-center justify-center">
-            <RefreshCw size={20} className="text-primary animate-spin mr-2" />
-            <span className="text-sm text-text-muted">Loading profile…</span>
-          </GlassCard>
-        ) : profile ? (
-          <GlassCard className="lg:col-span-3 p-5">
-            <div className="flex items-start justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-lg font-bold border ${
-                  (profile.total_risk_score || 0) >= 80 ? 'bg-red-500/10 border-red-500/30 text-red-400' :
-                  (profile.total_risk_score || 0) >= 60 ? 'bg-orange-500/10 border-orange-500/30 text-orange-400' :
-                  'bg-primary/10 border-primary/20 text-primary'
-                }`}>
-                  {(profile.name || selectedUser || 'U').charAt(0)}
-                </div>
-                <div>
-                  <h3 className="text-lg font-bold text-on-surface">{profile.name || selectedUser}</h3>
-                  <p className="text-xs text-text-muted font-mono">{selectedUser} · {profile.role} · {profile.department}</p>
-                  {userObj?.email && (
-                    <p className="text-xs text-text-muted mt-0.5 flex items-center gap-1">
-                      <Mail size={10} /> {userObj.email}
-                    </p>
-                  )}
-                  {profile.last_seen && (
-                    <p className="text-xs text-text-muted mt-0.5 flex items-center gap-1">
-                      <Clock size={10} /> Last seen: {new Date(profile.last_seen).toLocaleString()}
-                    </p>
-                  )}
+        {/* ── Subject profile ────────────────────────────────────────────── */}
+        <div className="lg:col-span-3">
+          {userLoading && !profile ? (
+            <Card className="h-full">
+              <div className="flex items-start gap-4">
+                <Skeleton className="w-14 h-14 rounded-xl" />
+                <div className="flex-1 space-y-2">
+                  <Skeleton className="h-5 w-48" />
+                  <Skeleton className="h-3.5 w-64" />
                 </div>
               </div>
-              <div className="text-right">
-                <div className={`text-3xl font-bold font-mono ${
-                  (profile.total_risk_score || 0) >= 80 ? 'text-red-400' :
-                  (profile.total_risk_score || 0) >= 60 ? 'text-orange-400' :
-                  (profile.total_risk_score || 0) >= 40 ? 'text-yellow-400' : 'text-green-400'
-                }`}>{(profile.total_risk_score || 0).toFixed(1)}</div>
-                <p className="text-[0.65rem] text-text-muted">Risk Score / 100</p>
-                <RiskBadge level={getRiskLevel(profile.total_risk_score || 0)} className="mt-1" />
-                {profile.rank && <p className="text-[0.65rem] text-text-muted mt-1">Rank #{profile.rank} most risky</p>}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
+                {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-16" />)}
               </div>
+            </Card>
+          ) : detailError ? (
+            <Card className="h-full">
+              <EmptyState
+                icon={AlertTriangle}
+                title="Could not load this subject"
+                description="The profile and risk history endpoints did not respond. Is the API running?"
+              />
+            </Card>
+          ) : (
+            <Card className="h-full">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <div
+                    className="w-14 h-14 rounded-xl flex items-center justify-center text-xl font-bold flex-shrink-0 border"
+                    style={{
+                      color: riskColor(riskScore),
+                      borderColor: 'var(--color-surface-variant)',
+                      background: 'var(--color-surface-low)',
+                    }}
+                  >
+                    {initial}
+                  </div>
+                  <div className="min-w-0">
+                    <h2 className="text-lg font-bold text-on-surface truncate">{displayName}</h2>
+                    <p className="text-xs text-on-surface-muted font-mono truncate">
+                      {selectedId} · {profile?.role || selectedUser?.role || '—'} · {profile?.department || selectedUser?.department || '—'}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1">
+                      {selectedUser?.email && (
+                        <span className="text-[0.7rem] text-on-surface-muted flex items-center gap-1">
+                          <Mail size={10} /> {selectedUser.email}
+                        </span>
+                      )}
+                      {profile?.last_seen && (
+                        <span className="text-[0.7rem] text-on-surface-muted flex items-center gap-1">
+                          <Clock size={10} /> Last seen {relTime(profile.last_seen)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <div className="text-4xl font-bold font-mono tabular-nums leading-none" style={{ color: riskColor(riskScore) }}>
+                    {num(riskScore, 1)}
+                  </div>
+                  <p className="text-[0.65rem] text-on-surface-muted mt-1">Risk score / 100</p>
+                  <div className="mt-1.5 flex justify-end">
+                    <RiskBadge level={level} showIcon />
+                  </div>
+                  {profile?.rank != null && (
+                    <p className="text-[0.65rem] text-on-surface-muted mt-1">Rank #{profile.rank} riskiest</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
+                <Metric
+                  label="Telemetry events"
+                  value={(profile?.event_count ?? timeline.length).toLocaleString()}
+                  sub="live agent stream"
+                />
+                <Metric
+                  label="Anomalies"
+                  value={anomalyCount.toLocaleString()}
+                  sub="risk ≥ 50 events"
+                  accentScore={anomalyCount > 0 ? 80 : 0}
+                />
+                <Metric
+                  label="Avg risk"
+                  value={num(profile?.avg_risk_score ?? 0, 1)}
+                  sub="telemetry mean"
+                  accentScore={profile?.avg_risk_score}
+                />
+                <Metric
+                  label="Peak risk"
+                  value={num(profile?.max_risk_score ?? 0, 1)}
+                  sub="telemetry max"
+                  accentScore={profile?.max_risk_score}
+                />
+              </div>
+            </Card>
+          )}
+        </div>
+      </div>
+
+      {/* ── Analysis grid ───────────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Risk trend (pipeline daily history) */}
+        <Panel padding="p-0" className="lg:col-span-2">
+          <div className="p-5">
+            <SectionHeader
+              icon={Activity}
+              title="Risk Score Trend"
+              subtitle={
+                trendData.length
+                  ? `${trendData.length} days of scored history from the risk pipeline`
+                  : 'No scored daily history for this subject'
+              }
+            />
+          </div>
+          <div className="px-2 pb-4">
+            {userLoading && !trendData.length ? (
+              <LoadingState label="Loading risk history…" className="h-56" />
+            ) : trendData.length === 0 ? (
+              <EmptyState
+                icon={Activity}
+                title="No risk history"
+                description="The risk pipeline has not scored any days for this subject."
+                className="h-56"
+              />
+            ) : (
+              <div className="h-56">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={trendData} margin={{ top: 8, right: 20, bottom: 4, left: -12 }}>
+                    <defs>
+                      <linearGradient id="fx-risk" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={CHART.risk.critical} stopOpacity={0.25} />
+                        <stop offset="100%" stopColor={CHART.risk.critical} stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} vertical={false} />
+                    <XAxis {...axisProps} dataKey="date" tick={{ ...axisProps.tick, fontSize: 10 }} minTickGap={16} />
+                    <YAxis {...axisProps} domain={[0, 100]} width={40} />
+                    <Tooltip
+                      content={<ChartTooltip valueFormatter={(v) => `${v} / 100`} />}
+                      cursor={{ stroke: CHART.grid }}
+                    />
+                    <Line
+                      type="monotone" dataKey="score" name="Risk"
+                      stroke={CHART.risk.critical} strokeWidth={2}
+                      dot={false} activeDot={{ r: 4 }} isAnimationActive={false}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
+        </Panel>
+
+        {/* Behavioral factors (real model features of latest scored day) */}
+        <Card>
+          <SectionHeader
+            icon={GitBranch}
+            title="Behavioral Factors"
+            subtitle={latestDay ? `Model features · ${latestDay.date}` : 'Latest scored day'}
+            divider
+          />
+          {userLoading && !latestDay ? (
+            <div className="space-y-3">
+              {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-6" />)}
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <div className="bg-surface-high rounded-lg p-3">
-                <p className="text-[0.65rem] text-text-muted">Total Events</p>
-                <p className="text-base font-bold font-mono text-on-surface">{(profile.event_count || timeline.length).toLocaleString()}</p>
-              </div>
-              <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
-                <p className="text-[0.65rem] text-red-400">Anomalies</p>
-                <p className="text-base font-bold font-mono text-red-400">{anomalyCount}</p>
-              </div>
-              <div className="bg-surface-high rounded-lg p-3">
-                <p className="text-[0.65rem] text-text-muted">Avg Risk</p>
-                <p className="text-base font-bold font-mono text-on-surface">{(profile.avg_risk_score || 0).toFixed(1)}</p>
-              </div>
-              <div className="bg-surface-high rounded-lg p-3">
-                <p className="text-[0.65rem] text-text-muted">Peak Risk</p>
-                <p className={`text-base font-bold font-mono ${(profile.max_risk_score || 0) >= 80 ? 'text-red-400' : 'text-on-surface'}`}>
-                  {(profile.max_risk_score || 0).toFixed(1)}
-                </p>
-              </div>
-            </div>
-          </GlassCard>
+          ) : (
+            <BehavioralFactors features={latestDay} />
+          )}
+        </Card>
+
+        {/* SHAP explanation (real; whole card omitted if unavailable) */}
+        {shap && Object.keys(shap).length > 0 ? (
+          <Card>
+            <SectionHeader
+              icon={Sparkles}
+              title="Model Explanation"
+              subtitle="Why the model scored this subject"
+              divider
+            />
+            <ShapExplanation explanation={shap} />
+          </Card>
         ) : (
-          <GlassCard className="lg:col-span-3 p-5 flex items-center justify-center text-text-muted text-sm">
-            Select an employee to view their forensic profile
-          </GlassCard>
+          <Card>
+            <SectionHeader
+              icon={Crosshair}
+              title="MITRE ATT&CK"
+              subtitle="Tactics observed in this subject's alerts"
+              divider
+            />
+            {userLoading && mitre.length === 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-7 w-32 rounded-full" />)}
+              </div>
+            ) : mitre.length === 0 ? (
+              <EmptyState
+                icon={Crosshair}
+                title="No ATT&CK mappings"
+                description="No alerts with MITRE tactics were recorded for this subject."
+                className="py-8"
+              />
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {mitre.map((m) => {
+                  const tName = MITRE_TACTIC_NAMES[m.tactic] || m.tactic
+                  const techName = m.technique ? (MITRE_TECHNIQUE_NAMES[m.technique] || m.technique) : null
+                  return (
+                    <span
+                      key={m.tactic}
+                      className="badge badge-high"
+                      title={`${m.tactic}${m.technique ? ` · ${m.technique}` : ''}`}
+                    >
+                      {m.tactic} · {tName}{techName ? ` — ${techName}` : ''}
+                    </span>
+                  )
+                })}
+              </div>
+            )}
+          </Card>
         )}
       </div>
 
-      {/* Session Stats — from real hourly data */}
-      {sessionStats && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <GlassCard className="p-4">
-            <p className="text-xs text-text-muted mb-1">Avg Mouse Velocity</p>
-            <p className="text-xl font-bold font-mono text-on-surface">{sessionStats.avgMouse}</p>
-            <p className="text-[0.65rem] text-text-muted">px/s avg over 7 days</p>
-          </GlassCard>
-          <GlassCard className="p-4">
-            <p className="text-xs text-text-muted mb-1">Avg Keystroke Flight</p>
-            <p className="text-xl font-bold font-mono text-on-surface">{sessionStats.avgFlight}<span className="text-xs font-normal">ms</span></p>
-            <p className="text-[0.65rem] text-text-muted">inter-key latency avg</p>
-          </GlassCard>
-          <GlassCard className="p-4">
-            <p className="text-xs text-text-muted mb-1">Active Hours (7d)</p>
-            <p className="text-xl font-bold font-mono text-on-surface">{sessionStats.totalSlots}</p>
-            <p className="text-[0.65rem] text-text-muted">day×hour slots with activity</p>
-          </GlassCard>
-          <GlassCard className="p-4">
-            <p className="text-xs text-text-muted mb-1">Peak Risk Hour</p>
-            <p className="text-xl font-bold font-mono text-on-surface">{sessionStats.peakHour}</p>
-            <p className="text-[0.65rem] text-text-muted">avg {sessionStats.peakRisk} risk score</p>
-          </GlassCard>
-        </div>
+      {/* If SHAP was shown above, MITRE gets its own full row so it is never dropped. */}
+      {shap && Object.keys(shap).length > 0 && (
+        <Card>
+          <SectionHeader
+            icon={Crosshair}
+            title="MITRE ATT&CK"
+            subtitle="Tactics observed in this subject's alerts"
+            divider
+          />
+          {mitre.length === 0 ? (
+            <EmptyState
+              icon={Crosshair}
+              title="No ATT&CK mappings"
+              description="No alerts with MITRE tactics were recorded for this subject."
+              className="py-8"
+            />
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {mitre.map((m) => {
+                const tName = MITRE_TACTIC_NAMES[m.tactic] || m.tactic
+                const techName = m.technique ? (MITRE_TECHNIQUE_NAMES[m.technique] || m.technique) : null
+                return (
+                  <span
+                    key={m.tactic}
+                    className="badge badge-high"
+                    title={`${m.tactic}${m.technique ? ` · ${m.technique}` : ''}`}
+                  >
+                    {m.tactic} · {tName}{techName ? ` — ${techName}` : ''}
+                  </span>
+                )
+              })}
+            </div>
+          )}
+        </Card>
       )}
 
-      {/* Analysis + Behavioral Widgets */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="space-y-6">
-          {/* Risk trend chart — real daily data */}
-          <GlowCard customSize glowColor="blue" className="p-6">
-            <h3 className="text-sm font-semibold text-on-surface mb-1">Risk Score Trend</h3>
-            <p className="text-xs text-text-muted mb-4">
-              {dailyChartData.length > 0 ? `${dailyChartData.length} days of real telemetry` : 'No timeline data'}
-            </p>
-            <div className="h-48">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={dailyChartData.length > 0 ? dailyChartData : [{day:'—', score:0}]}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#303541" />
-                  <XAxis dataKey="day" stroke="#6b7280" fontSize={9} />
-                  <YAxis stroke="#6b7280" fontSize={9} domain={[0, 100]} />
-                  <Tooltip
-                    contentStyle={{ background: '#1b1f2b', border: '1px solid #3d494c', borderRadius: 8, fontSize: 11 }}
-                    formatter={(val, name) => [val, name === 'score' ? 'Avg Risk' : 'Events']}
-                  />
-                  <Line type="monotone" dataKey="score" stroke="#ef4444" strokeWidth={2} dot={false} name="score" />
-                  <Line type="monotone" dataKey="events" stroke="#4cd7f6" strokeWidth={1} dot={false} name="events" strokeDasharray="4 2" />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </GlowCard>
-
-          {/* Risk Factor Breakdown — real values */}
-          <GlowCard customSize glowColor="blue" className="p-6">
-            <h3 className="text-sm font-semibold text-on-surface mb-4">Risk Factor Breakdown</h3>
-            <div className="h-44">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={riskFactors} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" stroke="#303541" />
-                  <XAxis type="number" stroke="#6b7280" fontSize={9} domain={[0, 100]} />
-                  <YAxis type="category" dataKey="name" stroke="#6b7280" fontSize={9} width={95} />
-                  <Tooltip contentStyle={{ background: '#1b1f2b', border: '1px solid #3d494c', borderRadius: 8, fontSize: 11 }} />
-                  <Bar dataKey="value" radius={[0, 4, 4, 0]}
-                    fill="#06b6d4"
-                    label={{ position: 'right', fontSize: 9, fill: '#9ca3af', formatter: v => v > 0 ? v : '' }}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </GlowCard>
-
-          {/* MITRE ATT&CK */}
-          <GlassCard>
-            <h3 className="text-sm font-semibold text-on-surface mb-3">MITRE ATT&CK Mapping</h3>
-            <div className="flex flex-wrap gap-2">
-              {MITRE_TAGS.map(t => (
-                <div key={t.tactic} className="flex items-center gap-1.5 bg-surface-highest px-3 py-1.5 rounded-full">
-                  <Tag size={10} className="text-tertiary" />
-                  <span className="text-[0.65rem] font-mono text-tertiary">{t.tactic}</span>
-                  <span className="text-[0.65rem] font-mono text-on-surface-variant">{t.name}</span>
-                </div>
-              ))}
-            </div>
-          </GlassCard>
+      {/* ── Event timeline (live telemetry; empty state when no agent) ────── */}
+      <Panel padding="p-0">
+        <div className="p-5">
+          <SectionHeader
+            icon={Clock}
+            title="Event Timeline"
+            subtitle={`${filteredTimeline.length} live telemetry events${highRiskOnly ? ' · high-risk only' : ''}`}
+            actions={
+              <label className="flex items-center gap-2 text-xs text-on-surface-muted cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={highRiskOnly}
+                  onChange={(e) => setHighRiskOnly(e.target.checked)}
+                  className="accent-[var(--color-primary)] w-3.5 h-3.5"
+                />
+                High-risk only (≥50)
+              </label>
+            }
+          />
         </div>
-
-        <div className="space-y-6">
-          {/* Keystroke Dynamics — real data */}
-          <KeystrokeDynamics data={keystrokeData} />
-
-          {/* Mouse/Activity Heatmap — real data */}
-          <MouseActivityHeatmap hourlyData={hourlyData} />
-
-          {/* Live Activity Feed — real timeline */}
-          <LiveActivityFeed events={timeline} />
-        </div>
-      </div>
-
-      {/* Full Event Timeline */}
-      <GlassCard>
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h3 className="text-sm font-semibold text-on-surface">Full Event Timeline</h3>
-            <p className="text-xs text-text-muted">{filteredTimeline.length} events{highRiskOnly ? ' (high-risk filtered)' : ''}</p>
-          </div>
-          <label className="flex items-center gap-2 text-xs text-text-muted cursor-pointer">
-            <input type="checkbox" checked={highRiskOnly} onChange={e => setHighRiskOnly(e.target.checked)} className="accent-primary w-3.5 h-3.5" />
-            High-risk only (≥50)
-          </label>
-        </div>
-        <div className="space-y-1.5 max-h-[480px] overflow-y-auto pr-1">
-          {filteredTimeline.length === 0 && (
-            <p className="text-xs text-text-muted text-center py-8">No events — run the telemetry agent for this user.</p>
-          )}
-          {filteredTimeline.map((evt, i) => {
-            const score = evt.risk_score || 0
-            return (
-              <div key={i} className={`bg-surface-high rounded-lg p-3 border-l-2 ${riskColor(score)}`}>
-                <div className="flex items-center justify-between mb-1">
-                  <div className="flex items-center gap-2">
-                    <Clock size={10} className="text-text-muted" />
-                    <span className="text-[0.65rem] font-mono text-text-muted">
-                      {evt.timestamp ? new Date(evt.timestamp).toLocaleString() : `Event #${i + 1}`}
-                    </span>
-                    {evt.is_anomaly && (
-                      <span className="text-[0.6rem] bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded font-mono">ANOMALY</span>
+        <div className="px-5 pb-5">
+          {userLoading && timeline.length === 0 ? (
+            <LoadingState label="Loading telemetry…" className="h-48" />
+          ) : filteredTimeline.length === 0 ? (
+            <EmptyState
+              icon={Info}
+              title="No telemetry events"
+              description="No live telemetry has been recorded for this subject. Run the endpoint agent to populate the timeline. Risk scoring above still reflects the ML pipeline."
+              className="py-10"
+            />
+          ) : (
+            <div className="space-y-1.5 max-h-[480px] overflow-y-auto pr-1">
+              {filteredTimeline.map((evt, i) => {
+                const score = evt.risk_score || 0
+                const d = evt.details || {}
+                return (
+                  <div
+                    key={`${evt.timestamp || i}-${i}`}
+                    className="well border-l-2 p-3"
+                    style={scoreStripe(score)}
+                  >
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Clock size={10} className="text-on-surface-muted flex-shrink-0" />
+                        <span className="text-[0.65rem] font-mono text-on-surface-muted truncate">
+                          {evt.timestamp ? new Date(evt.timestamp).toLocaleString() : `Event #${i + 1}`}
+                        </span>
+                        {evt.is_anomaly && (
+                          <span className="badge badge-critical text-[0.55rem] py-0 px-1.5">Anomaly</span>
+                        )}
+                      </div>
+                      <span className="text-xs font-mono font-bold tabular-nums flex-shrink-0" style={{ color: riskColor(score) }}>
+                        {score.toFixed(1)}
+                      </span>
+                    </div>
+                    <p className="text-xs text-on-surface-variant truncate">
+                      {evt.activity || `Telemetry event #${i + 1}`}
+                    </p>
+                    {(d.mouse_velocity > 0 || d.keystroke_flight_ms > 0 || d.productivity > 0) && (
+                      <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1.5 text-[0.6rem] font-mono text-on-surface-muted">
+                        {d.mouse_velocity > 0 && <span>mouse {num(d.mouse_velocity, 1)} px/s</span>}
+                        {d.keystroke_flight_ms > 0 && <span>flight {num(d.keystroke_flight_ms, 0)} ms</span>}
+                        {d.productivity > 0 && <span>prod {formatPercent(d.productivity)}</span>}
+                      </div>
                     )}
                   </div>
-                  <span className={`text-xs font-mono font-bold ${score >= 80 ? 'text-red-400' : score >= 60 ? 'text-orange-400' : score >= 40 ? 'text-yellow-400' : 'text-green-400'}`}>
-                    {score.toFixed(1)}
-                  </span>
-                </div>
-                <p className="text-xs text-on-surface-variant">{evt.activity || `Telemetry event #${i + 1}`}</p>
-                {evt.details && (evt.details.keystroke_flight_ms > 0 || evt.details.mouse_velocity > 0) && (
-                  <div className="flex gap-3 mt-1.5 text-[0.6rem] text-text-muted font-mono">
-                    {evt.details.mouse_velocity > 0 && <span>🖱 {evt.details.mouse_velocity.toFixed(1)} vel</span>}
-                    {evt.details.keystroke_flight_ms > 0 && <span>⌨ {evt.details.keystroke_flight_ms.toFixed(0)}ms flight</span>}
-                    {evt.details.productivity > 0 && <span>📊 {(evt.details.productivity * 100).toFixed(0)}% prod</span>}
-                  </div>
-                )}
-              </div>
-            )
-          })}
+                )
+              })}
+            </div>
+          )}
         </div>
-      </GlassCard>
+      </Panel>
 
-      {/* Analyst Notes */}
-      <GlowCard customSize glowColor="purple" className="p-6">
-        <h3 className="text-sm font-semibold text-on-surface mb-3">Analyst Notes</h3>
-        <textarea
-          value={notes} onChange={e => setNotes(e.target.value)}
-          placeholder="Add investigation notes, findings, or escalation details..."
-          className="w-full bg-surface-lowest text-on-surface text-xs font-mono p-3 rounded-lg border border-outline-variant/20 focus:outline-none focus:border-primary/40 resize-none h-24"
+      {/* ── Analyst feedback ─────────────────────────────────────────────── */}
+      <Card>
+        <SectionHeader
+          icon={ShieldAlert}
+          title="Analyst Feedback"
+          subtitle={latestDay ? `Feedback applies to scored day ${latestDay.date}` : 'Record an investigation verdict'}
+          divider
         />
-        <div className="flex items-center justify-between mt-3">
-          <label className="flex items-center gap-2 text-xs text-text-muted cursor-pointer">
-            <input type="checkbox" checked={isFP} onChange={e => setIsFP(e.target.checked)} className="accent-tertiary w-3.5 h-3.5" />
-            <ShieldAlert size={12} className="text-tertiary" />
-            Mark as False Positive
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          placeholder="Investigation notes, findings, or escalation details…"
+          className="input w-full h-24 resize-none font-mono text-xs"
+          aria-label="Analyst notes"
+        />
+        <div className="flex flex-wrap items-center justify-between gap-3 mt-3">
+          <label className="flex items-center gap-2 text-xs text-on-surface-variant cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={isFP}
+              onChange={(e) => { setIsFP(e.target.checked); setSubmitted(false) }}
+              className="accent-[var(--color-tertiary)] w-3.5 h-3.5"
+            />
+            <ShieldAlert size={13} className="text-tertiary" />
+            Mark as false positive
           </label>
-          <button
+          <Button
+            variant={submitted ? 'ghost' : 'primary'}
+            icon={submitted ? CheckCircle2 : Send}
             onClick={handleSubmitFeedback}
-            className="px-4 py-2 bg-primary hover:bg-primary/90 text-white rounded-lg text-xs font-medium transition-colors flex items-center gap-2"
+            disabled={submitting || submitted || !selectedId}
           >
-            {submitted ? <><CheckCircle2 size={14} /> Submitted</> : <><Send size={14} /> Submit Feedback</>}
-          </button>
+            {submitted ? 'Feedback recorded' : submitting ? 'Submitting…' : 'Submit feedback'}
+          </Button>
         </div>
-      </GlowCard>
+      </Card>
     </div>
   )
 }

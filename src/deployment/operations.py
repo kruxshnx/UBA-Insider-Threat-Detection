@@ -82,25 +82,31 @@ class ShadowModeDeployment:
     ) -> bool:
         """
         Deploy model in shadow mode.
-        
+
+        PARTIALLY SIMULATED: this records shadow-model *metadata* in the registry
+        but does NOT copy the model weights into the shadow directory. The
+        registry entry is marked ``"simulated": True`` to make clear that no real
+        artifact has been staged. A production implementation must copy
+        ``model_path`` to ``shadow_path`` before treating the model as deployed.
+
         Args:
             model_path: Path to model weights
             model_name: Name for shadow model
             model_type: Type of model
             config: Model configuration
-            
+
         Returns:
-            Success status
+            Success status (metadata registration only; see note above)
         """
         if not os.path.exists(model_path):
             logger.error("Model path does not exist: %s", model_path)
             return False
-        
+
         # Copy model to shadow directory
         shadow_path = self.shadow_dir / f"{model_name}.pth"
-        
-        # In production, would copy file
-        # For now, just track metadata
+
+        # SIMULATED: a production implementation would copy the weights file here.
+        # For now we only track metadata and flag it as not-yet-staged.
         self.shadow_models[model_name] = {
             'path': str(shadow_path),
             'type': model_type,
@@ -108,43 +114,57 @@ class ShadowModeDeployment:
             'config': config or {},
             'status': 'active',
             'predictions': 0,
-            'avg_latency_ms': 0
+            'avg_latency_ms': 0,
+            'simulated': True,  # metadata only — weights not actually copied
+            'weights_staged': False
         }
-        
+
         self._save_registry()
-        logger.info("Deployed shadow model: %s", model_name)
+        logger.warning(
+            "Registered shadow model metadata for %s (SIMULATED — weights not "
+            "copied to shadow dir)", model_name
+        )
         return True
     
     def process_shadow(
-        self, 
+        self,
         model_name: str,
         data: pd.DataFrame,
         production_predictions: np.ndarray
     ) -> ModelComparison:
         """
         Process data through shadow model and compare to production.
-        
+
+        WARNING — SIMULATED: This is a MOCK implementation. It does NOT load or
+        run a real shadow model. Shadow "predictions" are produced by adding
+        random Gaussian noise to the production predictions, and the accuracy /
+        latency figures are hardcoded placeholders (see ``_calculate_metrics``).
+        The returned metrics carry ``"simulated": True`` and MUST NOT be used as
+        real model-evaluation results. Replace with actual model inference
+        before relying on the comparison.
+
         Args:
             model_name: Shadow model to use
             data: Input data
             production_predictions: Predictions from production model
-            
+
         Returns:
-            Comparison results
+            Comparison results (with simulated metrics flagged)
         """
         if model_name not in self.shadow_models:
             raise ValueError(f"Shadow model not found: {model_name}")
-        
+
         shadow_model_info = self.shadow_models[model_name]
-        
-        # In production, would load shadow model and make predictions
-        # For now, simulate with noise
+
+        # SIMULATED: a real implementation would load the shadow model and run
+        # inference. Here we fabricate shadow predictions by perturbing the
+        # production predictions with random noise — this is a mock only.
         shadow_predictions = production_predictions + np.random.normal(0, 0.01, len(production_predictions))
-        
-        # Calculate metrics
+
+        # Calculate metrics (accuracy/latency are hardcoded mocks — see below)
         shadow_metrics = self._calculate_metrics(shadow_predictions)
         production_metrics = self._calculate_metrics(production_predictions)
-        
+
         # Compare
         comparison = ModelComparison(
             shadow_metrics=shadow_metrics,
@@ -154,28 +174,38 @@ class ShadowModeDeployment:
             recommendation=self._generate_recommendation(shadow_metrics, production_metrics),
             timestamp=datetime.now()
         )
-        
+
         self.comparison_history.append(comparison)
-        
+
         # Update stats
         self.shadow_models[model_name]['predictions'] += len(data)
-        
-        logger.info(
-            "Shadow comparison: %s (accuracy diff: %.2f%%)",
+
+        logger.warning(
+            "Shadow comparison for %s uses SIMULATED metrics (accuracy diff: "
+            "%.2f%%) — not a real model evaluation",
             model_name, comparison.accuracy_diff * 100
         )
-        
+
         return comparison
-    
+
     def _calculate_metrics(self, predictions: np.ndarray) -> Dict:
-        """Calculate model performance metrics."""
+        """
+        Calculate model performance metrics.
+
+        SIMULATED: ``latency`` and ``accuracy`` below are HARDCODED placeholder
+        values, not measurements. Only the distribution stats (mean/std/min/max)
+        are computed from the given predictions. The ``"simulated"`` flag marks
+        this payload as mock so downstream consumers never mistake it for a real
+        evaluation.
+        """
         return {
             'mean': float(np.mean(predictions)),
             'std': float(np.std(predictions)),
             'min': float(np.min(predictions)),
             'max': float(np.max(predictions)),
-            'latency': 10.0,  # Simulated
-            'accuracy': 0.95  # Simulated
+            'latency': 10.0,   # SIMULATED — hardcoded placeholder, not measured
+            'accuracy': 0.95,  # SIMULATED — hardcoded placeholder, not measured
+            'simulated': True  # These metrics are mock/simulated, not real
         }
     
     def _generate_recommendation(
@@ -196,23 +226,31 @@ class ShadowModeDeployment:
     def promote_to_production(self, model_name: str) -> bool:
         """
         Promote shadow model to production.
-        
-        This would replace the production model in a real deployment.
+
+        SIMULATED: this only flips the registry ``status`` to ``'promoted'``. It
+        does NOT back up the current production model, copy the shadow weights
+        into production, or trigger a model reload — those steps are stubbed out
+        below. The registry entry is flagged ``"promotion_simulated": True`` so
+        callers do not assume a real promotion occurred.
         """
         if model_name not in self.shadow_models:
             return False
-        
-        logger.info("Promoting shadow model to production: %s", model_name)
-        
-        # In production:
+
+        logger.warning(
+            "SIMULATED promotion of shadow model to production: %s "
+            "(no real model swap performed)", model_name
+        )
+
+        # SIMULATED — a real deployment would:
         # 1. Backup current production model
         # 2. Copy shadow model to production
         # 3. Update model registry
         # 4. Trigger model reload
-        
+
         self.shadow_models[model_name]['status'] = 'promoted'
+        self.shadow_models[model_name]['promotion_simulated'] = True
         self._save_registry()
-        
+
         return True
 
 

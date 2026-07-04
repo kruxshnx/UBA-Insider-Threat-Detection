@@ -26,6 +26,9 @@ pydantic==2.12.5
 python-multipart==0.0.22
 httpx==0.28.1
 
+# Security & Cryptography
+cryptography==49.0.0
+
 # Utilities
 PyYAML==6.0.3
 tqdm==4.67.3

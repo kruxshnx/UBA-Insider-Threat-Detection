@@ -9,6 +9,7 @@ Captures:
 Sends data to /api/telemetry endpoint every 5 seconds.
 """
 
+import os
 import json
 import time
 import threading
@@ -41,12 +42,25 @@ class TelemetryAgent:
         api_url: str = "http://localhost:8000/api/v1/telemetry/",
         user_id: str = "U001",
         send_interval: int = 5,
-        debug: bool = False
+        debug: bool = False,
+        track_keystrokes: bool = False
     ):
         self.api_url = api_url
         self.user_id = user_id
         self.send_interval = send_interval
         self.debug = debug
+
+        # Consent-gated keystroke capture.
+        #
+        # The global keyboard hook records keystroke *timing* (flight time), but
+        # a system-wide key listener is a keylogger and MUST NOT run without
+        # explicit consent. This is OFF by default and only enabled when
+        # track_keystrokes=True is passed (or UBA_TRACK_KEYSTROKES=1 is set).
+        # When disabled, mouse/window telemetry still runs but no keyboard
+        # listener is registered.
+        env_flag = os.environ.get("UBA_TRACK_KEYSTROKES", "").strip().lower()
+        env_consent = env_flag in ("1", "true", "yes", "on")
+        self.track_keystrokes = bool(track_keystrokes or env_consent)
         
         # Mouse tracking
         self.mouse_positions: List[Dict] = []
@@ -67,8 +81,12 @@ class TelemetryAgent:
         self.running = False
         self.mouse_listener: Optional[MouseListener] = None
         self.keyboard_listener: Optional[KeyboardListener] = None
-        
-        logger.info(f"TelemetryAgent initialized for user {user_id}")
+        self.telemetry_thread: Optional[threading.Thread] = None
+
+        logger.info(
+            f"TelemetryAgent initialized for user {user_id} "
+            f"(keystroke tracking {'ENABLED' if self.track_keystrokes else 'disabled'})"
+        )
     
     def get_active_window(self) -> Dict[str, str]:
         """
@@ -97,12 +115,12 @@ class TelemetryAgent:
                     }
                 except ImportError:
                     logger.warning("pywin32 not installed — install with: pip install pywin32")
-                    # Fallback: use psutil to find foreground process by CPU
-                    procs = [(p.info['name'], p.info['pid'])
-                             for p in psutil.process_iter(['name', 'pid', 'status'])
-                             if p.info['status'] == 'running']
-                    top = procs[0] if procs else ('unknown', 0)
-                    return {"app_name": top[0].lower(), "window_title": top[0], "pid": str(top[1])}
+                    # Without pywin32 we cannot determine the *foreground* window.
+                    # psutil can enumerate processes but has no notion of which
+                    # one is focused; returning an arbitrary running process
+                    # (e.g. procs[0]) would be misleading telemetry. Report
+                    # 'unknown' truthfully instead.
+                    return {"app_name": "unknown", "window_title": "Unknown", "pid": "0"}
             
             elif platform.system() == 'Darwin':  # macOS
                 try:
@@ -271,36 +289,54 @@ class TelemetryAgent:
     def start(self):
         """Start the telemetry agent."""
         self.running = True
-        
+
         # Start mouse listener
         self.mouse_listener = MouseListener(
             on_move=self.on_mouse_move,
             on_click=self.on_mouse_click
         )
         self.mouse_listener.start()
-        
-        # Start keyboard listener
-        self.keyboard_listener = KeyboardListener(
-            on_press=self.on_key_press
-        )
-        self.keyboard_listener.start()
-        
+
+        # Start keyboard listener ONLY when keystroke tracking is consented to.
+        # A global on_press hook is a keylogger; it stays off unless explicitly
+        # enabled via track_keystrokes / UBA_TRACK_KEYSTROKES.
+        if self.track_keystrokes:
+            self.keyboard_listener = KeyboardListener(
+                on_press=self.on_key_press
+            )
+            self.keyboard_listener.start()
+            logger.info("Keystroke timing capture enabled (consent granted)")
+        else:
+            self.keyboard_listener = None
+            logger.info(
+                "Keystroke tracking disabled — no keyboard hook registered. "
+                "Enable explicitly via track_keystrokes=True or UBA_TRACK_KEYSTROKES=1."
+            )
+
         # Start telemetry loop in separate thread
         self.telemetry_thread = threading.Thread(target=self.telemetry_loop, daemon=True)
         self.telemetry_thread.start()
-        
+
         logger.info("Telemetry agent started")
-    
+
     def stop(self):
         """Stop the telemetry agent."""
         self.running = False
-        
+
         if self.mouse_listener:
             self.mouse_listener.stop()
-        
+
         if self.keyboard_listener:
             self.keyboard_listener.stop()
-        
+
+        # Join the telemetry loop thread so it fully exits before we return.
+        # The loop checks self.running and sleeps up to send_interval seconds,
+        # so allow a little more than one interval before giving up.
+        if self.telemetry_thread is not None and self.telemetry_thread.is_alive():
+            self.telemetry_thread.join(timeout=self.send_interval + 2)
+            if self.telemetry_thread.is_alive():
+                logger.warning("Telemetry thread did not stop within timeout")
+
         logger.info("Telemetry agent stopped")
 
 
@@ -313,14 +349,21 @@ def main():
     parser.add_argument("--api-url", type=str, default="http://localhost:8000/api/v1/telemetry/", help="API endpoint")
     parser.add_argument("--interval", type=int, default=5, help="Send interval in seconds")
     parser.add_argument("--debug", action="store_true", help="Debug mode (no API calls)")
-    
+    parser.add_argument(
+        "--track-keystrokes",
+        action="store_true",
+        help="Enable keystroke-timing capture (global keyboard hook). "
+             "OFF by default; requires explicit consent."
+    )
+
     args = parser.parse_args()
-    
+
     agent = TelemetryAgent(
         user_id=args.user_id,
         api_url=args.api_url,
         send_interval=args.interval,
-        debug=args.debug
+        debug=args.debug,
+        track_keystrokes=args.track_keystrokes
     )
     
     try:

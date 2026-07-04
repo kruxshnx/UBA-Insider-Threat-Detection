@@ -11,7 +11,8 @@ All features are designed to be privacy-preserving (no keylogging content).
 
 import polars as pl
 import numpy as np
-from scipy.stats import entropy, skewness, kurtosis
+from scipy.stats import entropy
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 import logging
 
@@ -193,7 +194,7 @@ class BehavioralBiometricsEngine:
             (pl.col('file_operation').count() / (pl.col('timestamp').max() - pl.col('timestamp').min()).dt.total_seconds() * 60).alias('file_op_velocity') if 'file_operation' in df.columns else pl.lit(0.0).alias('file_op_velocity'),
             
             # After-hours activity ratio
-            ((pl.col('hour') < self.work_start) | (pl.col('hour') > self.work_end)).cast(pl.Float32).mean().alias('after_hours_ratio'),
+            ((pl.col('hour') < self.work_start) | (pl.col('hour') > self.work_end)).cast(pl.Float32).mean().alias('after_hours_ratio') if 'hour' in df.columns else pl.lit(0.0).alias('after_hours_ratio'),
         ])
         
         return features
@@ -404,7 +405,7 @@ def extract_behavioral_features(
     metadata = {
         'feature_count': len(signature.columns),
         'users_processed': signature['user'].n_unique() if 'user' in signature.columns else 0,
-        'timestamp': str(pl.datetime.now()),
+        'timestamp': datetime.now().isoformat(),
     }
     
     return signature, metadata

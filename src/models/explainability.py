@@ -7,7 +7,10 @@ import sys
 
 # Add parent to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from data_pipeline.preprocessing import PROJECT_ROOT
+
+# Project root (…/src/models/explainability.py → project root two levels up).
+# Computed locally so this module has no dependency on other data_pipeline modules.
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../"))
 
 class SHAPExplainer:
     def __init__(self, model_path=None, data_path=None):

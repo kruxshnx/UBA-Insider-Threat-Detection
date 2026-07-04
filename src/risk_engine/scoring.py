@@ -131,6 +131,17 @@ class AdvancedRiskScoringEngine:
         self.work_start = self.features_config.get('work_start_hour', 7)
         self.work_end = self.features_config.get('work_end_hour', 20)
 
+        # Minimum after-hours events before a day counts as an after-hours
+        # session (volume gate — suppresses noise from low-activity days where a
+        # single stray late event would otherwise make the ratio look extreme).
+        self.after_hours_min_events = self.features_config.get('after_hours_min_events', 6)
+
+        # Base-risk assigned when the LSTM error equals the role's anomaly
+        # threshold. Kept MODERATE (below the alert line) so that only errors
+        # well beyond the threshold saturate to 100 — this preserves a graded
+        # 0-100 score and stops rare-but-benign days from auto-alerting.
+        self.threshold_base = self.risk_config.get('threshold_base_risk', 45.0)
+
         # User metadata cache
         self.user_roles: Dict[str, str] = {}
         self.alert_manager = AlertManager()
@@ -151,20 +162,52 @@ class AdvancedRiskScoringEngine:
         self,
         row: pd.Series,
         anomaly_score: float,
-        model_type: str = "lstm"
+        model_type: str = "lstm",
+        role_meta: Optional[Dict] = None,
     ) -> Tuple[float, RiskExplanation]:
         """
         Calculate risk score with full explainability.
+
+        Operates on a DAILY user-day feature row containing behavioral aggregate
+        columns (file_copy_count, usb_count, removable_media_count, delete_count,
+        after_hours_count, after_hours_ratio, event_count). The single-'activity'
+        / single-'hour' logic has been replaced by count-driven logic so it works
+        on the daily featured timeline.
+
+        Args:
+            row: daily feature row for a user-day
+            anomaly_score: LSTM reconstruction error for that day
+            model_type: "lstm" or "baseline"
+            role_meta: the user's role metadata (error_mean/error_std/threshold)
+                       used to normalise the base risk relative to the role.
 
         Returns:
             Tuple of (risk_score, RiskExplanation)
         """
         factors = []
 
-        # 1. Base Score Mapping
-        base_risk = self._calculate_base_risk(anomaly_score, model_type)
+        # --- Read daily behavioral aggregates ---
+        def _num(key, default=0.0):
+            try:
+                v = row.get(key, default)
+                if v is None or (isinstance(v, float) and np.isnan(v)):
+                    return default
+                return float(v)
+            except Exception:
+                return default
+
+        file_copy_count = _num('file_copy_count')
+        usb_count = _num('usb_count')
+        removable_count = _num('removable_media_count')
+        delete_count = _num('delete_count')
+        ah_ratio = _num('after_hours_ratio')
+        ah_count = _num('after_hours_count')
+        event_count = _num('event_count')
+
+        # 1. Base Score Mapping (normalised relative to the role's error dist)
+        base_risk = self._calculate_base_risk(anomaly_score, model_type, role_meta)
         if base_risk > 10:
-            factors.append(f"Anomaly score {anomaly_score:.3f}")
+            factors.append(f"Anomaly score {anomaly_score:.3f} (role-normalised)")
 
         # 2. Role Multiplier
         user = row.get('user', '')
@@ -173,69 +216,82 @@ class AdvancedRiskScoringEngine:
         if role_mult > 1.0:
             factors.append(f"{role} role (+{int((role_mult-1)*100)}%)")
 
-        # 3. Time Multiplier
-        hour = row.get('hour', row.get('date', pd.Timestamp.now()))
-        if hasattr(hour, 'hour'):
-            hour = hour.hour
-
-        is_after_hours = hour < self.work_start or hour > self.work_end
+        # 3. Time Multiplier — derived from after_hours_ratio, NOT a single hour.
+        #    (Daily rows carry midnight timestamps, so a single hour would flag
+        #     everyone; the ratio of after-hours events is the honest signal.)
+        #    A VOLUME GATE is applied: a high ratio on a 1-2 event day is noise,
+        #    not an after-hours exfil session, so we also require several
+        #    after-hours events before treating the day as after-hours.
+        is_after_hours = ah_ratio > 0.3 and ah_count >= self.after_hours_min_events
         time_mult = self.after_hours_mult if is_after_hours else 1.0
         if is_after_hours:
-            factors.append(f"After-hours activity ({hour}:00)")
+            factors.append(f"After-hours activity pattern ({ah_ratio:.0%}, {int(ah_count)} events)")
 
-        # 4. Activity Multiplier (config-driven patterns)
-        activity = str(row.get('activity', ''))
+        # 4. Activity Multiplier — max of the config multipliers that apply,
+        #    based on which behavioral counts are non-zero this day.
         activity_mult = 1.0
         activity_reason = None
-
+        count_by_pattern = {
+            'File Copy': file_copy_count,
+            'Connect': usb_count,
+            'File Delete': delete_count,
+        }
         for act_pattern, mult in self.activity_multipliers.items():
-            if act_pattern in activity:
-                activity_mult = max(activity_mult, mult)
+            if act_pattern == 'default':
+                continue
+            if count_by_pattern.get(act_pattern, 0) > 0 and mult > activity_mult:
+                activity_mult = mult
                 activity_reason = act_pattern
+        if activity_mult > 1.0 and activity_reason:
+            factors.append(f"{activity_reason} activity (+{int((activity_mult-1)*100)}%)")
 
-        if activity_mult > 1.0:
-            factors.append(f"{activity_reason} (+{int((activity_mult-1)*100)}%)")
-
-        # 5. Behavioral Feature Boosts
+        # 5. Behavioral Feature Boosts (from the daily aggregates)
         behavioral_mult = 1.0
 
-        usb_events = row.get('usb_events_7d', 0)
-        if usb_events > 3:
+        if usb_count > 0:
             behavioral_mult *= 1.5
-            factors.append(f"USB activity spike ({usb_events} events)")
+            factors.append(f"USB connect activity ({int(usb_count)} events)")
 
-        copies = row.get('file_copy_count_24h', 0)
-        if copies > 5:
+        if removable_count > 0:
+            behavioral_mult *= 1.4
+            factors.append(f"Removable-media writes ({int(removable_count)} files)")
+
+        if file_copy_count > 5:
             behavioral_mult *= 1.3
-            factors.append(f"High file copy volume ({copies} files)")
+            factors.append(f"High file-copy volume ({int(file_copy_count)} files)")
 
-        ah_ratio = row.get('after_hours_ratio', 0)
-        if ah_ratio > 0.3:
+        if is_after_hours:
             behavioral_mult *= 1.2
-            factors.append(f"Elevated after-hours pattern ({ah_ratio:.0%})")
-        
-        # 6. Work-Integrity Multipliers (Vigilant Lens 2.0)
+            factors.append(f"Elevated after-hours ratio ({ah_ratio:.0%})")
+
+        # 6. Work-Integrity Multipliers (Vigilant Lens 2.0) — inert unless the
+        #    telemetry columns are present; retained for forward compatibility.
         work_integrity_mult = self._calculate_work_integrity_multiplier(row)
         if work_integrity_mult > 1.0:
             behavioral_mult *= work_integrity_mult
-            # Extract explanation from work integrity calculation
-            wi_factors = self._get_work_integrity_factors(row)
-            factors.extend(wi_factors)
+            factors.extend(self._get_work_integrity_factors(row))
 
-        # 6. Calculate Final Risk
+        # 7. Calculate Final Risk
         final_risk = base_risk * role_mult * time_mult * activity_mult * behavioral_mult
 
-        # Heuristic override for dangerous combinations
-        if "File Copy" in activity and is_after_hours and usb_events > 0:
+        # Pattern override for the classic exfil combination:
+        #   bulk file copy + USB connect + after-hours all on the same day.
+        pattern_hit = file_copy_count > 0 and usb_count > 0 and is_after_hours
+        if pattern_hit:
             final_risk = max(final_risk, 85)
-            factors.append("PATTERN: File copy + USB + After-hours")
+            factors.append("PATTERN: File copy + USB + After-hours exfil")
 
         final_risk = min(self.max_risk, final_risk)
 
-        # 7. MITRE Mapping
-        mitre = self._get_mitre_mapping(activity, is_after_hours)
+        # 8. MITRE Mapping — derived from which behavioral counts fired.
+        mitre = self._get_mitre_mapping(
+            file_copy_count=file_copy_count,
+            usb_count=usb_count,
+            delete_count=delete_count,
+            is_after_hours=is_after_hours,
+        )
 
-        # 8. Build Explanation
+        # 9. Build Explanation
         primary_factor = factors[0] if factors else "Normal activity"
         text_explanation = self._build_explanation(final_risk, factors, mitre)
 
@@ -250,33 +306,90 @@ class AdvancedRiskScoringEngine:
 
         return final_risk, explanation
 
-    def _calculate_base_risk(self, anomaly_score: float, model_type: str) -> float:
-        """Convert raw anomaly score to base risk (0-100)."""
-        threshold_config = config.thresholds
+    def _calculate_base_risk(
+        self,
+        anomaly_score: float,
+        model_type: str,
+        role_meta: Optional[Dict] = None,
+    ) -> float:
+        """
+        Convert a raw anomaly score to base risk (0-100), normalised RELATIVE to
+        the role's reconstruction-error distribution.
 
+        For the LSTM path we map the error onto the interval
+        [error_mean, threshold]:
+            base = (error - error_mean) / (threshold - error_mean) * 100
+        clamped to 0-100. A normal day (~error_mean) maps near 0, a day at the
+        role's anomaly threshold maps to ~100, and there is no universal
+        saturation because the scale adapts per role. Falls back to a z-score
+        when threshold/mean are unusable.
+        """
         if model_type == "lstm":
+            if role_meta:
+                error_mean = float(role_meta.get('error_mean', 0.0))
+                error_std = float(role_meta.get('error_std', 0.0))
+                threshold = float(role_meta.get('threshold', 0.0))
+
+                span = threshold - error_mean
+                if span > 1e-6:
+                    # Map error_mean -> 0 and the role's anomaly threshold ->
+                    # THRESHOLD_BASE (a MODERATE base, not saturation). The slope
+                    # continues beyond the threshold so genuinely extreme errors
+                    # (many multiples of the threshold, e.g. bulk exfil) climb to
+                    # 100, while borderline days that merely graze the percentile
+                    # threshold stay well below the alert line. This is what
+                    # separates U105's huge reconstruction errors from ordinary
+                    # rare-but-benign days.
+                    frac = (anomaly_score - error_mean) / span
+                    base = frac * self.threshold_base
+                    return float(min(100.0, max(0.0, base)))
+
+                # Fallback: z-score scaled so ~+3 sigma -> ~75
+                if error_std > 1e-6:
+                    z = (anomaly_score - error_mean) / error_std
+                    return float(min(100.0, max(0.0, z * 25.0)))
+
+            # No metadata available: fall back to the legacy fixed mapping.
+            threshold_config = config.thresholds
             mean = threshold_config.get('lstm_anomaly_mean', 0.16)
-            deviation = max(0, anomaly_score - mean)
-            return min(100, deviation * self.base_multiplier)
+            deviation = max(0.0, anomaly_score - mean)
+            return float(min(100.0, deviation * self.base_multiplier))
 
         elif model_type == "baseline":
             if anomaly_score < 0:
-                return min(100, abs(anomaly_score) * 400)
-            return 0
+                return float(min(100.0, abs(anomaly_score) * 400))
+            return 0.0
 
-        return 0
+        return 0.0
 
-    def _get_mitre_mapping(self, activity: str, is_after_hours: bool) -> Dict:
-        """Get MITRE ATT&CK mapping for activity."""
-        if "Logon" in activity and is_after_hours:
-            mapping = self.mitre_mapping.get('After Hours Logon', {})
-            if mapping:
-                return mapping
+    def _get_mitre_mapping(
+        self,
+        file_copy_count: float = 0.0,
+        usb_count: float = 0.0,
+        delete_count: float = 0.0,
+        is_after_hours: bool = False,
+    ) -> Dict:
+        """Get MITRE ATT&CK mapping derived from which daily counts fired.
 
-        for pattern, mapping in self.mitre_mapping.items():
-            if pattern in activity:
-                return mapping
-
+        Priority: exfil (File Copy) > USB (Connect) > destruction (Delete) >
+        after-hours logon.
+        """
+        if file_copy_count > 0:
+            m = self.mitre_mapping.get('File Copy', {})
+            if m:
+                return m
+        if usb_count > 0:
+            m = self.mitre_mapping.get('Connect', {})
+            if m:
+                return m
+        if delete_count > 0:
+            m = self.mitre_mapping.get('File Delete', {})
+            if m:
+                return m
+        if is_after_hours:
+            m = self.mitre_mapping.get('After Hours Logon', {})
+            if m:
+                return m
         return {}
 
     def _build_explanation(self, risk: float, factors: List[str], mitre: Dict) -> str:

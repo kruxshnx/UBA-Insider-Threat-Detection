@@ -69,7 +69,7 @@ class FeatureStore:
         """Load feature registry from disk."""
         registry_path = self.store_path / "registry.json"
         if registry_path.exists():
-            with open(registry_path, 'r') as f:
+            with open(registry_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 self.features = {
                     k: FeatureMetadata(**v) for k, v in data.items()
@@ -90,7 +90,7 @@ class FeatureStore:
             }
             for k, v in self.features.items()
         }
-        with open(registry_path, 'w') as f:
+        with open(registry_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, default=str)
     
     def _load_encoders(self):
@@ -124,15 +124,18 @@ class FeatureStore:
             Feature hash (ID)
         """
         feature_hash = hashlib.md5(f"{name}:{version}".encode()).hexdigest()[:8]
-        
-        self.features[feature_hash] = FeatureMetadata(
+
+        # Register keyed by feature name so lookups in validate_feature /
+        # compute_statistics (which index by name) resolve correctly. The
+        # hash is returned as a stable feature ID for external referencing.
+        self.features[name] = FeatureMetadata(
             name=name,
             dtype=dtype,
             description=description,
             created_at=datetime.now(),
             version=version
         )
-        
+
         self._save_registry()
         logger.info("Registered feature: %s (v%s) -> %s", name, version, feature_hash)
         return feature_hash
@@ -294,8 +297,8 @@ class FeaturePipeline:
     
     def __init__(self, feature_store: FeatureStore = None):
         self.feature_store = feature_store or FeatureStore()
-        self.config = config.features
-        self.biometrics_config = config.behavioral_biometrics
+        self.config = config.get('features', {})
+        self.biometrics_config = config.get('features', {}).get('behavioral_biometrics', {})
         
         # Feature definitions
         self.feature_specs = self._define_features()

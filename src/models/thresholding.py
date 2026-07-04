@@ -322,16 +322,28 @@ class ConceptDriftDetector:
                 'recommendation': 'Set reference distribution first'
             }
         
-        # Ensure same sample size for comparison
+        # Ensure same sample size for comparison. Draw a random (seeded)
+        # subsample from the larger array rather than head-slicing, which
+        # would bias the test toward whichever records happen to come first.
         min_len = min(len(self.reference_scores), len(current_scores))
-        ref_sample = self.reference_scores[:min_len]
-        cur_sample = current_scores[:min_len]
-        
+        rng = np.random.default_rng(42)
+
+        def _subsample(arr: np.ndarray, n: int) -> np.ndarray:
+            if len(arr) <= n:
+                return arr
+            idx = rng.choice(len(arr), size=n, replace=False)
+            return arr[idx]
+
+        ref_sample = _subsample(self.reference_scores, min_len)
+        cur_sample = _subsample(current_scores, min_len)
+
         # Perform statistical test
         if self.test_method == 'ks':
             statistic, p_value = stats.ks_2samp(ref_sample, cur_sample)
         elif self.test_method == 'cvm':
-            statistic, p_value = stats.cramervonmills_2samp(ref_sample, cur_sample)
+            # cramervonmises_2samp returns a result object, not a tuple
+            cvm_result = stats.cramervonmises_2samp(ref_sample, cur_sample)
+            statistic, p_value = cvm_result.statistic, cvm_result.pvalue
         else:
             raise ValueError(f"Unknown test method: {self.test_method}")
         

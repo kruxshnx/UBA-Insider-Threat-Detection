@@ -54,12 +54,25 @@ class TestUserBaselineTracker:
         assert result['valid'] is False
 
     def test_sufficient_data_returns_valid(self, tracker):
-        """3+ data points → valid baseline with avg/std."""
-        scores = [10.0, 12.0, 8.0, 15.0, 9.0]
+        """Enough history → valid baseline from the EARLIER-period days.
+
+        The baseline now excludes the most-recent ``recent_window`` days and is
+        computed only over the earlier days (so drift compares recent behavior to
+        the user's own earlier behavior). We therefore need more than
+        recent_window days of history, and avg/std are over the earlier slice.
+        """
+        # 10 chronological daily-risk values; the last recent_window are the
+        # "current" window and are excluded from the baseline.
+        scores = [10.0, 12.0, 8.0, 15.0, 9.0, 11.0, 10.0, 13.0, 7.0, 9.0]
+        baseline_slice = scores[:-tracker.recent_window]
+        assert len(baseline_slice) >= 3  # sanity: enough earlier days
+
         result = tracker.update_baseline('U100', scores)
         assert result['valid'] is True
-        assert result['avg'] == pytest.approx(np.mean(scores))
-        assert result['std'] == pytest.approx(np.std(scores))
+        assert result['count'] == len(baseline_slice)
+        # avg/std are computed over the EARLIER-period slice, not all scores.
+        assert result['avg'] == pytest.approx(np.mean(baseline_slice))
+        assert result['std'] == pytest.approx(np.std(baseline_slice))
 
     def test_baseline_updates_user_state(self, tracker):
         """update_baseline stores the result in user_baselines dict."""
@@ -73,26 +86,71 @@ class TestUserBaselineTracker:
         assert 'Insufficient' in explanation
 
     def test_detect_drift_below_sigma(self, tracker):
-        """Risk within N-sigma of avg → no drift."""
-        tracker.update_baseline('U100', [10, 11, 9, 12, 10, 8])
-        # avg ≈ 10, std ≈ ~1.4, so 12 is ~1.4σ which is < drift_sigma (2.0)
+        """Recent daily risk within N-sigma of the earlier baseline → no drift.
+
+        Feed enough history for a VALID baseline (more than recent_window days)
+        so the "within sigma" branch — not the insufficient-data branch — is what
+        returns False.
+        """
+        history = [10, 11, 9, 12, 10, 8, 10, 11, 9, 10]
+        tracker.update_baseline('U100', history)
+        baseline = tracker.user_baselines['U100']
+        assert baseline['valid'] is True
+
+        # A recent daily risk of 12 sits within drift_sigma of the ~10 baseline.
         is_drift, z, _ = tracker.detect_drift('U100', 12.0)
         assert is_drift is False
+        assert z <= tracker.drift_sigma
 
     def test_detect_drift_above_sigma(self, tracker):
-        """Risk far above avg → drift detected."""
-        tracker.update_baseline('U100', [10, 11, 9, 12, 10, 8])
-        # avg ≈ 10, std ≈ ~1.4, so 20 is ~7σ which is > drift_sigma (2.0)
+        """Recent daily risk far above the user's earlier baseline → drift.
+
+        The baseline is built from the earlier-period days (recent_window days
+        are excluded), so we feed a quiet daily history and then probe with a
+        recent daily-risk value many sigma above that quiet baseline.
+        """
+        # 10 quiet days; earlier-period baseline ≈ 10 with small std.
+        history = [10, 11, 9, 12, 10, 8, 10, 11, 9, 10]
+        tracker.update_baseline('U100', history)
+        baseline = tracker.user_baselines['U100']
+        assert baseline['valid'] is True
+
+        # A recent daily risk of 20 is many sigma above the ~10 baseline.
         is_drift, z, _ = tracker.detect_drift('U100', 20.0)
         assert is_drift is True
-        assert z > 2.0
+        assert z > tracker.drift_sigma
 
     def test_detect_drift_low_variance_user(self, tracker):
-        """Very low variance user — even small increase triggers drift."""
-        tracker.update_baseline('U100', [5.0, 5.0, 5.0, 5.0, 5.0])
-        # std ≈ 0, so risk 30 (25 above avg) should trigger
+        """Very low variance user — a clear absolute jump triggers drift.
+
+        With a near-zero-variance baseline the sigma test is meaningless, so the
+        engine falls back to an absolute-jump rule (recent > baseline avg + 15).
+        Feed enough flat history for a valid, ~0-std baseline, then probe with a
+        recent value well above avg + 15.
+        """
+        tracker.update_baseline('U100', [5.0] * 10)
+        baseline = tracker.user_baselines['U100']
+        assert baseline['valid'] is True
+        assert baseline['std'] < 1.0  # low-variance branch applies
+
+        # Recent daily risk of 30 is 25 above the flat baseline of 5 → drift.
         is_drift, _, _ = tracker.detect_drift('U100', 30.0)
         assert is_drift is True
+
+    def test_detect_drift_low_variance_small_jump_no_drift(self, tracker):
+        """Low-variance user with only a small jump stays within range → no drift.
+
+        A recent value just a few points above the flat baseline must NOT trip
+        drift (the absolute-jump gate is +15), proving the low-variance branch
+        isn't hair-trigger.
+        """
+        tracker.update_baseline('U100', [5.0] * 10)
+        baseline = tracker.user_baselines['U100']
+        assert baseline['std'] < 1.0
+
+        # 10 is only +5 above the baseline of 5 — below the +15 absolute gate.
+        is_drift, _, _ = tracker.detect_drift('U100', 10.0)
+        assert is_drift is False
 
 
 # ── RiskAggregator Tests ─────────────────────────────────────────────────────

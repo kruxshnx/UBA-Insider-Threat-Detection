@@ -20,9 +20,6 @@ import logging
 import os
 import json
 from pathlib import Path
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 import pandas as pd
 import sys
 
@@ -30,6 +27,31 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from utils.config import config
 
 logger = logging.getLogger("uba.security.privacy")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Optional cryptography dependency.
+#
+# Importing this module must NEVER crash just because `cryptography` is missing.
+# We guard the import here and expose a `CRYPTOGRAPHY_AVAILABLE` flag. When the
+# library is unavailable, any component that requires encryption (Fernet-based
+# CryptographicErasure) degrades gracefully: it logs a warning and disables
+# encryption instead of raising at import time.
+# ──────────────────────────────────────────────────────────────────────────────
+try:
+    from cryptography.fernet import Fernet  # type: ignore
+    from cryptography.hazmat.primitives import hashes  # type: ignore
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF  # type: ignore
+    CRYPTOGRAPHY_AVAILABLE = True
+except Exception as _crypto_import_error:  # pragma: no cover - env dependent
+    Fernet = None  # type: ignore
+    hashes = None  # type: ignore
+    HKDF = None  # type: ignore
+    CRYPTOGRAPHY_AVAILABLE = False
+    logger.warning(
+        "cryptography library unavailable (%s); encryption features are "
+        "DISABLED. Install with: pip install cryptography",
+        _crypto_import_error,
+    )
 
 
 @dataclass
@@ -124,45 +146,90 @@ class PseudonymizationEngine:
         return token_b64
     
     def depseudonymize(
-        self, 
-        token: str, 
+        self,
+        token: str,
         original_id: str,
         operator: str,
         justification: str,
         approver: Optional[str] = None
-    ) -> Tuple[bool, Optional[str]]:
+    ) -> Tuple[bool, Optional[str], Optional[str]]:
         """
         Revert pseudonymization (requires dual-control approval).
-        
+
+        This performs a real reverse lookup against the in-memory token map
+        (``reverse_cache``), which records ``token -> "user_id:salt"`` for every
+        token this engine has generated in the current process.
+
+        HMAC tokenization is intentionally one-way: without a stored mapping
+        there is no way to recover the original ID from the token alone. If the
+        token is not present in the reverse map, this method does NOT fabricate
+        success — it returns a truthful "not supported" status so callers can
+        route the request to an offline/approved recovery process instead.
+
         Args:
             token: Pseudonymous token
-            original_id: Claimed original ID (for verification)
+            original_id: Claimed original ID (for verification, optional)
             operator: Person requesting de-anonymization
             justification: Reason for de-anonymization
             approver: Second person approving the operation (dual-control)
-            
+
         Returns:
-            Tuple of (success, error_message)
+            Tuple of (success, recovered_id_or_none, error_message).
+            - success=True with a recovered_id when the reverse lookup resolves.
+            - success=False with an error_message otherwise (approval missing,
+              token unknown, or verification mismatch).
         """
         # Dual-control check
         if approver is None:
             error_msg = "Dual-control approval required"
             self._audit_log("depseudonymize", operator, justification, False, error_msg)
-            return False, error_msg
-        
-        # Verify token matches
-        # In production, this would involve additional verification steps
+            return False, None, error_msg
+
+        # Real reverse lookup via the stored token map.
+        cache_key = self.reverse_cache.get(token)
+        if cache_key is None:
+            # HMAC is not reversible and we have no stored mapping for this
+            # token in the current process. Be honest: this is not supported
+            # here and needs an approved offline recovery process.
+            error_msg = (
+                "De-pseudonymization not supported: token not found in reverse "
+                "map. HMAC tokenization is one-way; recovery requires an approved "
+                "offline mapping/key-escrow process."
+            )
+            self._audit_log(
+                "depseudonymize", operator, justification, False,
+                approver=approver, error=error_msg
+            )
+            logger.warning(
+                "De-pseudonymization requested by %s (approved by %s) but token "
+                "is unknown to this engine: %s",
+                operator, approver, justification
+            )
+            return False, None, error_msg
+
+        # cache_key is stored as "user_id:salt"; recover the user_id portion.
+        recovered_id = cache_key.rsplit(":", 1)[0]
+
+        # Optional verification against a claimed original ID.
+        if original_id and recovered_id != str(original_id):
+            error_msg = "Verification failed: recovered ID does not match claimed original ID"
+            self._audit_log(
+                "depseudonymize", operator, justification, False,
+                approver=approver, error=error_msg
+            )
+            return False, None, error_msg
+
         logger.info(
-            "De-pseudonymization requested by %s, approved by %s: %s",
+            "De-pseudonymization succeeded for operator %s, approved by %s: %s",
             operator, approver, justification
         )
-        
+
         self._audit_log(
-            "depseudonymize", operator, justification, 
+            "depseudonymize", operator, justification,
             True, approver=approver
         )
-        
-        return True, None
+
+        return True, recovered_id, None
     
     def pseudonymize_dataframe(
         self, 
@@ -224,7 +291,7 @@ class PseudonymizationEngine:
         audit_file = Path("data/security_output/privacy_audit.log")
         audit_file.parent.mkdir(parents=True, exist_ok=True)
         
-        with open(audit_file, 'a') as f:
+        with open(audit_file, 'a', encoding='utf-8') as f:
             f.write(
                 f"{entry.timestamp.isoformat()} | "
                 f"{entry.operation} | "
@@ -261,16 +328,31 @@ class CryptographicErasure:
     def __init__(self, key_vault_path: str = "data/security_output/key_vault"):
         self.key_vault_path = Path(key_vault_path)
         self.key_vault_path.mkdir(parents=True, exist_ok=True)
-        
+
+        # Encryption is only available when the cryptography library is present.
+        self.encryption_enabled = CRYPTOGRAPHY_AVAILABLE
+
         # Per-user encryption keys
         self.user_keys: Dict[str, bytes] = self._load_keys()
-        
-        # Default Fernet for general encryption
-        self.default_key = self._get_default_key()
-        self.fernet = Fernet(self.default_key)
-        
-        logger.info("CryptographicErasure initialized")
-    
+
+        # Default Fernet for general encryption — deferred/lazy so importing and
+        # instantiating this class never crashes when cryptography is missing.
+        self.default_key: Optional[bytes] = None
+        self.fernet = None
+
+        if self.encryption_enabled:
+            self.default_key = self._get_default_key()
+            self.fernet = Fernet(self.default_key)
+        else:
+            logger.warning(
+                "CryptographicErasure initialized WITHOUT encryption "
+                "(cryptography unavailable). encrypt/decrypt operations will "
+                "raise; key erasure of existing keys still works."
+            )
+
+        logger.info("CryptographicErasure initialized (encryption_enabled=%s)",
+                    self.encryption_enabled)
+
     def _load_keys(self) -> Dict[str, bytes]:
         """Load existing user keys from vault."""
         keys = {}
@@ -280,11 +362,11 @@ class CryptographicErasure:
                 with open(key_file, 'rb') as f:
                     keys[user_id] = f.read()
         return keys
-    
+
     def _get_default_key(self) -> bytes:
         """Load or generate default encryption key."""
         key_path = self.key_vault_path / "default.key"
-        
+
         if key_path.exists():
             with open(key_path, 'rb') as f:
                 return f.read()
@@ -294,40 +376,58 @@ class CryptographicErasure:
                 f.write(key)
             os.chmod(key_path, 0o600)
             return key
-    
+
     def encrypt_user_data(self, user_id: str, data: bytes) -> bytes:
         """
         Encrypt data with user-specific key.
-        
+
         Args:
             user_id: User identifier
             data: Data to encrypt
-            
+
         Returns:
             Encrypted data
+
+        Raises:
+            RuntimeError: if the cryptography library is unavailable.
         """
+        if not self.encryption_enabled:
+            raise RuntimeError(
+                "Encryption unavailable: the 'cryptography' library is not "
+                "installed. Install it with: pip install cryptography"
+            )
+
         # Get or generate user-specific key
         if user_id not in self.user_keys:
             self.user_keys[user_id] = Fernet.generate_key()
             self._save_user_key(user_id)
-        
+
         user_fernet = Fernet(self.user_keys[user_id])
         return user_fernet.encrypt(data)
-    
+
     def decrypt_user_data(self, user_id: str, encrypted_data: bytes) -> bytes:
         """
         Decrypt data with user-specific key.
-        
+
         Args:
             user_id: User identifier
             encrypted_data: Encrypted data
-            
+
         Returns:
             Decrypted data
+
+        Raises:
+            RuntimeError: if the cryptography library is unavailable.
         """
+        if not self.encryption_enabled:
+            raise RuntimeError(
+                "Decryption unavailable: the 'cryptography' library is not "
+                "installed. Install it with: pip install cryptography"
+            )
+
         if user_id not in self.user_keys:
             raise ValueError(f"No key found for user: {user_id}")
-        
+
         user_fernet = Fernet(self.user_keys[user_id])
         return user_fernet.decrypt(encrypted_data)
     
@@ -365,7 +465,7 @@ class CryptographicErasure:
         audit_file = Path("data/security_output/gdpr_erasure.log")
         audit_file.parent.mkdir(parents=True, exist_ok=True)
         
-        with open(audit_file, 'a') as f:
+        with open(audit_file, 'a', encoding='utf-8') as f:
             f.write(
                 f"{datetime.now().isoformat()} | "
                 f"GDPR Erasure | "
@@ -474,7 +574,7 @@ class AccessControl:
         audit_file = Path("data/security_output/access_control.log")
         audit_file.parent.mkdir(parents=True, exist_ok=True)
         
-        with open(audit_file, 'a') as f:
+        with open(audit_file, 'a', encoding='utf-8') as f:
             f.write(
                 f"{datetime.now().isoformat()} | "
                 f"{role} | "

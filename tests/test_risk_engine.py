@@ -45,15 +45,34 @@ def alert_mgr():
 
 
 def _make_row(user='U100', hour=10, activity='Logon', **extra):
-    """Helper to build a fake event row."""
-    return {
+    """Helper to build a fake event row.
+
+    The scoring engine now consumes DAILY behavioral aggregate columns rather
+    than a single 'activity' string / single 'hour'. This helper still accepts
+    the legacy kwargs (kept so unchanged tests read naturally) but maps them
+    onto the new count columns, and lets callers override any aggregate via
+    ``**extra`` (e.g. file_copy_count=, usb_count=, after_hours_ratio=).
+    """
+    # Derive daily aggregates from the legacy activity/hour so existing tests
+    # that only care about "File Copy at night" still exercise the same path.
+    after_hours = hour < 7 or hour > 20
+    row = {
         'user': user,
         'date': pd.Timestamp(f'2024-01-15 {hour:02d}:00:00'),
-        'hour': hour,
         'source': 'Logon',
         'activity': activity,
-        **extra,
+        'event_count': 10.0,
+        'file_copy_count': 3.0 if activity == 'File Copy' else 0.0,
+        'usb_count': 0.0,
+        'removable_media_count': 0.0,
+        'delete_count': 3.0 if activity == 'File Delete' else 0.0,
+        # After-hours is now driven by a ratio + a volume gate (>=6 events),
+        # not a single hour, so populate both when the legacy hour is nocturnal.
+        'after_hours_ratio': 0.8 if after_hours else 0.0,
+        'after_hours_count': 8.0 if after_hours else 0.0,
     }
+    row.update(extra)
+    return row
 
 
 # ── AdvancedRiskScoringEngine Tests ──────────────────────────────────────────
@@ -102,11 +121,37 @@ class TestRiskScoring:
         assert night_score >= day_score, "After-hours should score equal or higher"
 
     def test_after_hours_factor_in_explanation(self, engine):
-        """After-hours triggers a factor in the explanation."""
-        row = _make_row(hour=3)
+        """A high after-hours ratio over the volume gate adds an after-hours factor.
+
+        After-hours is now derived from after_hours_ratio (> 0.3) combined with
+        a volume gate (after_hours_count >= after_hours_min_events), not a single
+        clock hour.
+        """
+        row = _make_row(
+            hour=10,  # daytime timestamp; the aggregates drive the signal now
+            after_hours_ratio=0.75,
+            after_hours_count=8.0,
+            event_count=10.0,
+        )
         _, explanation = engine.calculate_risk_score(row, 0.4)
         factor_texts = ' '.join(explanation.factors)
         assert 'After-hours' in factor_texts
+
+    def test_after_hours_volume_gate_suppresses_low_activity(self, engine):
+        """A high after-hours RATIO on a tiny-volume day must NOT flag after-hours.
+
+        The volume gate suppresses noise: one stray late event on a 2-event day
+        would otherwise make the ratio look extreme.
+        """
+        row = _make_row(
+            hour=10,
+            after_hours_ratio=1.0,     # every event was after-hours...
+            after_hours_count=1.0,     # ...but there was only ONE event (below gate)
+            event_count=1.0,
+        )
+        _, explanation = engine.calculate_risk_score(row, 0.4)
+        factor_texts = ' '.join(explanation.factors)
+        assert 'After-hours' not in factor_texts
 
     def test_file_copy_activity_multiplier(self, engine):
         """File Copy activity gets a multiplier boost."""
@@ -119,11 +164,39 @@ class TestRiskScoring:
         assert copy_score >= normal_score
 
     def test_heuristic_override_file_copy_usb_afterhours(self, engine):
-        """File Copy + USB + after-hours → at least 85."""
-        row = _make_row(hour=2, activity='File Copy', usb_events_7d=5)
+        """Bulk file copy + USB connect + after-hours on one day → at least 85.
+
+        The exfil pattern override now fires when the daily aggregates show
+        file_copy_count > 0 AND usb_count > 0 AND the after-hours gate is met.
+        """
+        row = _make_row(
+            hour=10,
+            file_copy_count=12.0,
+            usb_count=3.0,
+            after_hours_ratio=0.8,
+            after_hours_count=9.0,
+            event_count=20.0,
+        )
         score, explanation = engine.calculate_risk_score(row, 0.4)
         assert score >= 85
         assert any('PATTERN' in f for f in explanation.factors)
+
+    def test_no_override_without_after_hours(self, engine):
+        """File copy + USB but WITHOUT after-hours does not trigger the override.
+
+        Removing the after-hours condition must drop the PATTERN factor, proving
+        the override genuinely depends on all three signals (not file+USB alone).
+        """
+        row = _make_row(
+            hour=10,
+            file_copy_count=12.0,
+            usb_count=3.0,
+            after_hours_ratio=0.0,
+            after_hours_count=0.0,
+            event_count=20.0,
+        )
+        _, explanation = engine.calculate_risk_score(row, 0.4)
+        assert not any('PATTERN' in f for f in explanation.factors)
 
     def test_baseline_model_type(self, engine):
         """Baseline (Isolation Forest) model type works."""
@@ -146,19 +219,37 @@ class TestRiskScoring:
 
 class TestMitreMapping:
     def test_file_copy_maps_to_exfiltration(self, engine):
-        """File Copy should map to TA0010 Exfiltration."""
-        mitre = engine._get_mitre_mapping('File Copy', False)
+        """A day with file-copy activity maps to TA0010 Exfiltration."""
+        mitre = engine._get_mitre_mapping(file_copy_count=3.0)
+        assert mitre.get('tactic') == 'TA0010'
+        assert mitre.get('technique') == 'T1052'
+
+    def test_usb_connect_maps_to_exfiltration(self, engine):
+        """USB connect activity maps to TA0010 Exfiltration (Hardware Additions)."""
+        mitre = engine._get_mitre_mapping(usb_count=2.0)
+        assert mitre.get('tactic') == 'TA0010'
+        assert mitre.get('technique') == 'T1200'
+
+    def test_file_delete_maps_to_impact(self, engine):
+        """File-delete activity maps to TA0040 Impact (Data Destruction)."""
+        mitre = engine._get_mitre_mapping(delete_count=1.0)
+        assert mitre.get('tactic') == 'TA0040'
+        assert mitre.get('technique') == 'T1485'
+
+    def test_after_hours_maps_to_credential_access(self, engine):
+        """An after-hours-only day maps to Credential Access."""
+        mitre = engine._get_mitre_mapping(is_after_hours=True)
+        assert mitre.get('tactic') == 'TA0006'
+
+    def test_file_copy_takes_priority_over_after_hours(self, engine):
+        """File copy outranks after-hours logon in the mapping priority."""
+        mitre = engine._get_mitre_mapping(file_copy_count=5.0, is_after_hours=True)
+        # Exfiltration (File Copy) wins over Credential Access (after-hours).
         assert mitre.get('tactic') == 'TA0010'
 
-    def test_logon_after_hours_maps_to_credential_access(self, engine):
-        """Logon + after-hours should map to Credential Access."""
-        mitre = engine._get_mitre_mapping('Logon', True)
-        # Could be TA0006 (After Hours Logon) or TA0001 (Logon)
-        assert mitre.get('tactic') in ('TA0006', 'TA0001')
-
-    def test_unknown_activity_returns_empty(self, engine):
-        """Unknown activity returns empty dict."""
-        mitre = engine._get_mitre_mapping('SomeRandomActivity', False)
+    def test_no_activity_returns_empty(self, engine):
+        """No behavioral counts and no after-hours → empty dict."""
+        mitre = engine._get_mitre_mapping()
         assert mitre == {}
 
 

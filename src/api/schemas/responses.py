@@ -4,7 +4,7 @@ Uses json_schema_extra for examples (Pydantic V2 compatible).
 """
 
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any, Union
 from enum import Enum
 
 
@@ -49,17 +49,51 @@ class UserRiskProfile(BaseModel):
 
 # ── Events ───────────────────────────────────────────────────────────────────
 class RiskEvent(BaseModel):
+    """
+    A risk-scored event from the risk pipeline's ``risk_report_events.csv``.
+
+    Behavioral count fields are surfaced from the pipeline when present and
+    default to ``None`` when a column is absent (e.g. before the pipeline fix
+    that adds file_copy_count / usb_count / … lands). ``model_config`` allows
+    extra keys so any additional pipeline columns pass through without a schema
+    error.
+    """
     user: str = Field(..., description="User who generated the event")
     risk_score: float = Field(..., ge=0, description="Event risk score")
-    activity: Optional[str] = Field("Unknown Activity", description="Type of activity")
-    timestamp: Optional[str] = Field(None, description="Event timestamp (ISO 8601)")
-    details: Optional[str] = Field(None, description="Additional context")
+    role: Optional[str] = Field(None, description="User role at event time")
+    day: Optional[str] = Field(None, description="Event day (pipeline day bucket)")
+    timestamp: Optional[str] = Field(None, description="Event timestamp / date (ISO 8601)")
+    activity: Optional[str] = Field(None, description="Type of activity (null if not derivable)")
+    explanation: Optional[str] = Field(None, description="Human-readable risk explanation")
+    mitre_tactic: Optional[str] = Field(None, description="MITRE ATT&CK tactic ID")
+    should_alert: Optional[bool] = Field(None, description="Whether the pipeline flagged this for alerting")
+    alert_severity: Optional[str] = Field(None, description="Pipeline-assigned alert severity")
+
+    # Behavioral count columns (populated by the risk pipeline; null if absent)
+    file_copy_count: Optional[int] = Field(None, description="File copy events in the bucket")
+    usb_count: Optional[int] = Field(None, description="USB events in the bucket")
+    removable_media_count: Optional[int] = Field(None, description="Removable-media events")
+    after_hours_ratio: Optional[float] = Field(None, description="Ratio of after-hours activity")
+    delete_count: Optional[int] = Field(None, description="File delete events")
+    event_count: Optional[int] = Field(None, description="Total events in the bucket")
+
+    # Widened to accept structured pipeline context (dict) as well as free text,
+    # so a dict-shaped `details` from the risk pipeline cannot trigger a
+    # ResponseValidationError -> 500 (same class of bug as TimelineEvent.details).
+    details: Optional[Union[Dict[str, Any], str]] = Field(
+        None, description="Additional context (structured metrics dict or free text)"
+    )
 
     model_config = {
+        "extra": "allow",
         "json_schema_extra": {
             "examples": [{
-                "user": "U105", "risk_score": 73.2,
-                "activity": "File Copy", "timestamp": "2025-01-15T14:30:00",
+                "user": "U105", "risk_score": 73.2, "role": "Employee",
+                "day": "2024-01-15", "timestamp": "2024-01-15",
+                "activity": None, "explanation": "Elevated file activity after hours.",
+                "mitre_tactic": "TA0010", "should_alert": True, "alert_severity": "High",
+                "file_copy_count": 12, "usb_count": 1, "removable_media_count": 1,
+                "after_hours_ratio": 0.4, "delete_count": 3, "event_count": 58,
             }]
         }
     }
@@ -67,18 +101,23 @@ class RiskEvent(BaseModel):
 
 # ── System Stats ─────────────────────────────────────────────────────────────
 class SystemStats(BaseModel):
-    total_users: int = Field(..., ge=0, description="Total monitored users")
-    high_risk_users: int = Field(..., ge=0, description="Users with risk score > 50")
-    total_events: int = Field(..., ge=0, description="Total events processed")
-    high_risk_events: int = Field(..., ge=0, description="Events with risk score > 50")
-    avg_risk_score: float = Field(..., ge=0, description="Mean risk score across users")
+    total_users: int = Field(0, ge=0, description="Total monitored users")
+    high_risk_users: int = Field(0, ge=0, description="Users with risk score >= 50")
+    total_events: int = Field(0, ge=0, description="Total events processed")
+    high_risk_events: int = Field(0, ge=0, description="Events with risk score >= 50")
+    avg_risk_score: float = Field(0.0, ge=0, description="Mean risk score across users")
     top_threat: str = Field("None", description="User with highest risk")
+    data_source: str = Field(
+        "unavailable",
+        description="Source of truth for these headline numbers (e.g. risk_report_users.csv)",
+    )
 
     model_config = {
         "json_schema_extra": {
             "examples": [{
                 "total_users": 100, "high_risk_users": 12, "total_events": 5420,
                 "high_risk_events": 87, "avg_risk_score": 34.7, "top_threat": "U105",
+                "data_source": "risk_report_users.csv",
             }]
         }
     }
@@ -102,7 +141,12 @@ class TimelineEvent(BaseModel):
     risk_score: float = Field(0.0, ge=0, description="Absolute risk score")
     is_anomaly: bool = Field(False, description="Whether this event is flagged anomalous")
     pc: Optional[str] = Field(None, description="Workstation identifier")
-    details: Optional[str] = Field(None, description="Additional context")
+    # `details` carries structured context (mouse/keystroke/productivity metrics)
+    # from the telemetry pipeline, so it must accept a dict — not just a string.
+    # A plain string is still allowed for legacy/free-text callers.
+    details: Optional[Union[Dict[str, Any], str]] = Field(
+        None, description="Additional context (structured metrics dict or free text)"
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -110,6 +154,11 @@ class TimelineEvent(BaseModel):
                 "timestamp": "2025-01-15", "event_type": "device", "activity": "Connect",
                 "anomaly_score": 0.82, "risk_score": 78.4, "is_anomaly": True,
                 "pc": "PC-0421",
+                "details": {
+                    "mouse_velocity": 245.3,
+                    "keystroke_flight_ms": 120.5,
+                    "productivity": 0.78,
+                },
             }]
         }
     }

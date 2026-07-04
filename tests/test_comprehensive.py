@@ -122,47 +122,66 @@ class TestConceptDrift:
 
 class TestFeatureStore:
     """Test feature store operations."""
-    
-    def test_register_feature(self):
-        """Test feature registration."""
-        store = FeatureStore(store_path="data/test_feature_store")
+
+    def test_register_feature(self, tmp_path):
+        """Features are now registered and looked up BY NAME (register-by-hash
+        bug fixed). The registry key is the feature name; the returned value is
+        a stable non-empty hash ID for external referencing.
+        """
+        store = FeatureStore(store_path=str(tmp_path / "fs"))
         feature_hash = store.register_feature(
             name='test_feature',
             dtype='float32',
             description='Test feature for validation'
         )
-        
-        assert feature_hash in store.features
-        assert store.features[feature_hash].name == 'test_feature'
-    
-    def test_categorical_encoding(self):
+
+        # Registry is keyed by NAME, not by the hash.
+        assert 'test_feature' in store.features
+        assert store.features['test_feature'].name == 'test_feature'
+        # The hash is still returned as a stable, non-empty ID (and is not the
+        # registry key).
+        assert isinstance(feature_hash, str) and feature_hash
+        assert feature_hash not in store.features
+
+    def test_categorical_encoding(self, tmp_path):
         """Test categorical feature encoding."""
-        store = FeatureStore(store_path="data/test_feature_store")
-        
+        store = FeatureStore(store_path=str(tmp_path / "fs"))
+
         # Fit encoder
         values = pd.Series(['A', 'B', 'A', 'C', 'A', 'B', 'A'])
         encoder = store.fit_categorical('test_cat', values)
-        
+
         assert 'encoding' in encoder
         assert 'A' in encoder['encoding']
-        
+
         # Transform
         encoded = store.transform_categorical('test_cat', ['A', 'B', 'C'])
         assert len(encoded) == 3
-    
-    def test_feature_validation(self):
-        """Test feature validation."""
-        store = FeatureStore(store_path="data/test_feature_store")
-        
+
+    def test_feature_validation(self, tmp_path):
+        """A feature registered by name is found by compute_statistics /
+        validate_feature (previously the name/hash key mismatch meant lookups
+        missed the registered feature).
+        """
+        store = FeatureStore(store_path=str(tmp_path / "fs"))
+
         # Register feature
         store.register_feature('test_valid', 'float32', 'Validation test')
-        
-        # Compute statistics
+
+        # Compute statistics — this now updates the by-name registry entry.
         values = pd.Series([1.0, 2.0, 3.0, np.nan, 5.0])
         stats = store.compute_statistics('test_valid', values)
-        
+
         assert stats['count'] == 5
         assert stats['missing'] == 1
+        # Statistics are persisted onto the registered (by-name) feature.
+        assert store.features['test_valid'].statistics == stats
+
+        # validate_feature also resolves the registered feature by name (no
+        # longer reports "Feature not registered").
+        validation = store.validate_feature('test_valid', values)
+        assert validation.get('error') != 'Feature not registered'
+        assert 'metrics' in validation
     
     def test_feature_pipeline(self):
         """Test feature pipeline transformation."""

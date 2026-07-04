@@ -8,7 +8,13 @@
  *  - Structured error objects
  */
 
-const API_BASE = (import.meta.env.VITE_API_URL || '') + '/api';
+// Base URL resolution:
+//   VITE_API_URL is the backend origin WITHOUT a trailing "/api" (see
+//   .env.example). We append "/api" here. When unset (local dev) API_BASE
+//   becomes "/api", which vite.config.js proxies to http://localhost:8000.
+//   A trailing slash on VITE_API_URL is tolerated (stripped) to avoid "//api".
+const API_ORIGIN = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+const API_BASE = `${API_ORIGIN}/api`;
 
 // ── Shared fetch wrapper ────────────────────────────────────────────────────
 

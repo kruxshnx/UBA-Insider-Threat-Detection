@@ -260,9 +260,9 @@ class SystemEvaluator:
         else:
             report += "❌ **Detection Failed** - System did not flag threat user\n"
         
-        with open(output_path, 'w') as f:
+        with open(output_path, 'w', encoding='utf-8') as f:
             f.write(report)
-        
+
         logger.info("Report saved to %s", output_path)
 
 
@@ -273,7 +273,7 @@ def run_evaluation() -> Dict:
     
     # Save JSON
     json_path = os.path.join(RISK_OUTPUT_DIR, "evaluation_results.json")
-    with open(json_path, 'w') as f:
+    with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(results, f, indent=2, default=str)
     
     # Generate markdown report

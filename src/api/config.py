@@ -72,8 +72,12 @@ class Settings:
     )
 
     # ── Data Cache ───────────────────────────────────────────────────────────
+    # Read from config.yaml (api.data_cache_ttl_seconds) with UBA_CACHE_TTL env override.
     DATA_CACHE_TTL_SECONDS: int = int(
-        os.environ.get("UBA_CACHE_TTL", 30)
+        os.environ.get(
+            "UBA_CACHE_TTL",
+            _api_cfg.get("data_cache_ttl_seconds", 30),
+        )
     )
 
     # ── Logging ──────────────────────────────────────────────────────────────

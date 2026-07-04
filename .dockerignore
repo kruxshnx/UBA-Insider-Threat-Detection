@@ -21,3 +21,8 @@ eval_*.txt
 evaluation_results*.txt
 run_log.txt
 train.log
+
+# Secrets, keys, and databases — never bake these into images
+.env
+*.db
+data/security_output/

@@ -52,9 +52,20 @@ class TestSecurityEngine:
         sec = SecurityEngine(salt="test_salt")
         original = "User123"
         masked = sec.mask_pii(original)
-        
+
+        # One-way: the mask must not equal the plaintext.
         assert original != masked
-        assert len(masked) == 12 # as defined in engine
+        # Digest is now a 32-hex-char sha256 prefix (was 12).
+        assert len(masked) == 32
+        assert all(c in "0123456789abcdef" for c in masked)
+
+        # Determinism: same salt + same input -> same digest.
+        assert sec.mask_pii(original) == masked
+
+        # Salt is configurable and actually changes the digest, so identical
+        # plaintext does not map to the same token across deployments.
+        other = SecurityEngine(salt="different_salt")
+        assert other.mask_pii(original) != masked
         
     def test_rbac_admin(self):
         sec = SecurityEngine()

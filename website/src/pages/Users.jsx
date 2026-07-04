@@ -1,157 +1,471 @@
-import { useState, useEffect } from 'react'
-import { fetchUsers } from '../services/api'
-import { Users as UsersIcon, Search, AlertTriangle, Mail, Briefcase } from 'lucide-react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
+import {
+  Users as UsersIcon,
+  Search,
+  RefreshCw,
+  ShieldAlert,
+  ArrowUpDown,
+  ChevronRight,
+  Fingerprint,
+} from 'lucide-react'
+
+import { fetchRiskyUsers } from '../services/api'
+import {
+  Card,
+  Panel,
+  SectionHeader,
+  StatCard,
+  RiskBadge,
+  RiskBar,
+  DataTable,
+  EmptyState,
+  Skeleton,
+  Button,
+} from '../components/ui'
+import { riskBand, cn } from '../lib/utils'
+
+/* Normalise a raw user record into a safe, uniform shape.
+   Every field is guarded — the backend is being fixed concurrently, so
+   `name`, `role`, `department`, `risk_level` may all be null/undefined. */
+function normalizeUser(raw = {}) {
+  const id = raw.user ?? raw.user_id ?? raw.id ?? '—'
+  const score = Number(
+    raw.total_risk_score ?? raw.risk_score ?? 0,
+  )
+  const safeScore = Number.isFinite(score) ? score : 0
+  // Prefer the backend's own band; fall back to a computed one from the score.
+  const level = String(raw.risk_level || riskBand(safeScore)).toLowerCase()
+  return {
+    id,
+    name: raw.name || null,
+    role: raw.role || null,
+    department: raw.department || null,
+    score: safeScore,
+    level,
+  }
+}
+
+const SORTS = [
+  { key: 'risk-desc', label: 'Risk: high → low' },
+  { key: 'risk-asc', label: 'Risk: low → high' },
+  { key: 'name-asc', label: 'Name: A → Z' },
+  { key: 'id-asc', label: 'User ID: A → Z' },
+]
+
+const LEVELS = ['all', 'critical', 'high', 'medium', 'low']
 
 export default function Users() {
+  const navigate = useNavigate()
+
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
-  const [searchTerm, setSearchTerm] = useState('')
-  const [roleFilter, setRoleFilter] = useState('All')
+  const [error, setError] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
 
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        const data = await fetchUsers()
-        setUsers(data || [])
-        setLoading(false)
-      } catch (error) {
-        console.error('Error loading users:', error)
-        setLoading(false)
-      }
+  const [searchTerm, setSearchTerm] = useState('')
+  const [levelFilter, setLevelFilter] = useState('all')
+  const [sortKey, setSortKey] = useState('risk-desc')
+
+  const loadData = useCallback(async ({ silent = false } = {}) => {
+    if (silent) setRefreshing(true)
+    else setLoading(true)
+    try {
+      // PRIMARY risk-pipeline data — always the 100 synthetic users incl. U105.
+      const data = await fetchRiskyUsers(100, 'desc')
+      const list = Array.isArray(data) ? data.map(normalizeUser) : []
+      setUsers(list)
+      setError(false)
+    } catch (err) {
+      console.error('Users: failed to load risky users:', err)
+      setError(true)
+    } finally {
+      setLoading(false)
+      setRefreshing(false)
     }
-    loadData()
-    const interval = setInterval(loadData, 5000)
-    return () => clearInterval(interval)
   }, [])
 
-  const filteredUsers = users.filter(user => {
-    const matchesSearch = user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         user.user_id.toLowerCase().includes(searchTerm.toLowerCase())
-    const matchesRole = roleFilter === 'All' || user.role === roleFilter
-    return matchesSearch && matchesRole
-  })
+  useEffect(() => {
+    loadData()
+  }, [loadData])
 
-  const roles = ['All', ...new Set(users.map(u => u.role))]
+  /* Rank is assigned by descending risk over the FULL list (stable identity),
+     so a user's rank badge is consistent regardless of the active sort. */
+  const rankedById = useMemo(() => {
+    const rank = new Map()
+    ;[...users]
+      .sort((a, b) => b.score - a.score)
+      .forEach((u, i) => rank.set(u.id, i + 1))
+    return rank
+  }, [users])
 
-  const getRiskColor = (score) => {
-    if (score >= 80) return 'text-red-500'
-    if (score >= 60) return 'text-orange-500'
-    if (score >= 40) return 'text-yellow-500'
-    return 'text-green-500'
-  }
+  const filteredSorted = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase()
+    let out = users.filter((u) => {
+      const matchesLevel = levelFilter === 'all' || u.level === levelFilter
+      if (!matchesLevel) return false
+      if (!q) return true
+      // Guard every field — never call .toLowerCase() on null.
+      const hay = [u.id, u.name, u.role, u.department]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+      return hay.includes(q)
+    })
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-center text-on-surface">
-          <p>Loading users...</p>
+    out = [...out].sort((a, b) => {
+      switch (sortKey) {
+        case 'risk-asc':
+          return a.score - b.score
+        case 'name-asc':
+          return (a.name || a.id).localeCompare(b.name || b.id)
+        case 'id-asc':
+          return String(a.id).localeCompare(String(b.id))
+        case 'risk-desc':
+        default:
+          return b.score - a.score
+      }
+    })
+    return out
+  }, [users, searchTerm, levelFilter, sortKey])
+
+  /* ── Honest, computed KPIs (no fabricated numbers) ── */
+  const stats = useMemo(() => {
+    const total = users.length
+    const critical = users.filter((u) => u.level === 'critical').length
+    const high = users.filter((u) => u.level === 'high').length
+    const avg = total
+      ? users.reduce((s, u) => s + u.score, 0) / total
+      : 0
+    return { total, critical, high, avg }
+  }, [users])
+
+  const goToForensics = useCallback(
+    (u) => {
+      if (!u?.id || u.id === '—') return
+      navigate(`/forensics?user=${encodeURIComponent(u.id)}`)
+    },
+    [navigate],
+  )
+
+  const columns = [
+    {
+      key: 'rank',
+      header: '#',
+      width: '3.5rem',
+      render: (u) => (
+        <span className="font-mono tabular-nums text-on-surface-muted">
+          {rankedById.get(u.id) ?? '—'}
+        </span>
+      ),
+    },
+    {
+      key: 'user',
+      header: 'User',
+      render: (u) => {
+        const initial = (u.name || u.id || 'U').charAt(0).toUpperCase()
+        return (
+          <div className="flex items-center gap-3 min-w-0">
+            <span
+              className={cn(
+                'flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold font-mono',
+                u.level === 'critical' && 'bg-error-container/25 text-error',
+                u.level === 'high' && 'bg-tertiary-container/20 text-tertiary',
+                u.level === 'medium' && 'bg-tertiary-container/15 text-tertiary',
+                u.level === 'low' && 'bg-success-dim/25 text-success',
+              )}
+              aria-hidden="true"
+            >
+              {initial}
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-on-surface truncate">
+                {u.name || 'Unknown user'}
+              </p>
+              <p className="text-xs font-mono text-on-surface-muted truncate">
+                {u.id}
+              </p>
+            </div>
+          </div>
+        )
+      },
+    },
+    {
+      key: 'role',
+      header: 'Role',
+      render: (u) => (
+        <span className="text-on-surface-variant">{u.role || '—'}</span>
+      ),
+    },
+    {
+      key: 'department',
+      header: 'Department',
+      render: (u) => (
+        <span className="text-on-surface-variant">{u.department || '—'}</span>
+      ),
+    },
+    {
+      key: 'risk',
+      header: 'Risk Score',
+      width: '9rem',
+      render: (u) => (
+        <div className="flex items-center gap-2.5">
+          <RiskBar score={u.score} className="h-1.5 flex-1 min-w-[64px]" />
+          <span className="font-mono tabular-nums text-sm text-on-surface w-9 text-right">
+            {u.score.toFixed(0)}
+          </span>
         </div>
-      </div>
-    )
-  }
+      ),
+    },
+    {
+      key: 'level',
+      header: 'Level',
+      render: (u) => <RiskBadge level={u.level} showIcon />,
+    },
+    {
+      key: 'go',
+      header: '',
+      width: '2.5rem',
+      align: 'right',
+      render: () => (
+        <ChevronRight
+          size={16}
+          className="text-on-surface-muted"
+          aria-hidden="true"
+        />
+      ),
+    },
+  ]
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-on-surface">User Management</h1>
-        <p className="text-on-surface-muted mt-1">Monitor and manage employee accounts</p>
-      </div>
-
-      {/* Filters */}
-      <div className="flex gap-4">
-        <div className="flex-1 relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-muted" />
-          <input
-            type="text"
-            placeholder="Search users..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 bg-surface border border-surface-variant rounded text-on-surface focus:outline-none focus:border-primary/50"
-          />
-        </div>
-        <select
-          value={roleFilter}
-          onChange={(e) => setRoleFilter(e.target.value)}
-          className="px-4 py-2 bg-surface border border-surface-variant rounded text-on-surface focus:outline-none focus:border-primary/50"
-        >
-          {roles.map(role => (
-            <option key={role} value={role}>{role}</option>
-          ))}
-        </select>
-      </div>
-
-      {/* Users Grid */}
-      <div className="grid gap-4">
-        {filteredUsers.length === 0 ? (
-          <div className="bg-surface rounded-lg p-12 border border-surface-variant text-center">
-            <AlertTriangle className="w-12 h-12 mx-auto mb-4 text-on-surface-muted opacity-50" />
-            <h3 className="text-lg font-semibold text-on-surface mb-2">No users found</h3>
-            <p className="text-on-surface-muted">Try adjusting your search or filter</p>
+    <div className="space-y-6 animate-fade-in">
+      {/* ── Page header ── */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-3">
+          <div className="bg-primary/10 rounded-xl p-2.5 flex-shrink-0">
+            <UsersIcon size={22} className="text-primary" aria-hidden="true" />
           </div>
-        ) : (
-          filteredUsers.map((user) => (
-            <div key={user.user_id} className="bg-surface rounded-lg p-4 border border-surface-variant">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                    user.risk_score >= 80 ? 'bg-red-500/20' :
-                    user.risk_score >= 60 ? 'bg-orange-500/20' :
-                    user.risk_score >= 40 ? 'bg-yellow-500/20' : 'bg-green-500/20'
-                  }`}>
-                    <UsersIcon className={`w-5 h-5 ${
-                      user.risk_score >= 80 ? 'text-red-500' :
-                      user.risk_score >= 60 ? 'text-orange-500' :
-                      user.risk_score >= 40 ? 'text-yellow-500' : 'text-green-500'
-                    }`} />
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-on-surface">{user.name}</h3>
-                    <div className="flex items-center gap-3 text-sm text-on-surface-muted mt-1">
-                      <span className="flex items-center gap-1">
-                        <Briefcase className="w-3 h-3" />
-                        {user.role}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <Mail className="w-3 h-3" />
-                        {user.email}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className={`text-2xl font-bold ${getRiskColor(user.risk_score || 0)}`}>
-                    {(user.risk_score || 0).toFixed(1)}
-                  </div>
-                  <div className="text-xs text-on-surface-muted">Risk Score</div>
-                  <div className="text-xs text-on-surface-muted mt-1">
-                    Prod: {((user.productivity_score || 0) * 100).toFixed(0)}%
-                  </div>
-                </div>
-              </div>
-            </div>
+          <div>
+            <h1 className="text-xl font-bold text-on-surface tracking-tight">
+              User Risk Leaderboard
+            </h1>
+            <p className="text-sm text-on-surface-muted mt-0.5">
+              Every monitored user ranked by model-scored insider-threat risk.
+            </p>
+          </div>
+        </div>
+        <Button
+          variant="ghost"
+          icon={RefreshCw}
+          onClick={() => loadData({ silent: true })}
+          disabled={refreshing || loading}
+          className={refreshing ? '[&_svg]:animate-spin' : undefined}
+        >
+          Refresh
+        </Button>
+      </div>
+
+      {/* ── Error banner (non-blocking) ── */}
+      {error && (
+        <div
+          className="flex items-center gap-3 rounded-md border border-error-container/55 bg-error-container/15 px-4 py-3 text-sm text-error"
+          role="alert"
+        >
+          <ShieldAlert size={16} className="flex-shrink-0" aria-hidden="true" />
+          <span>
+            Backend unavailable — could not load user risk data. Is the API
+            running?
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => loadData()}
+            className="ml-auto"
+          >
+            Retry
+          </Button>
+        </div>
+      )}
+
+      {/* ── KPI row ── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {loading ? (
+          Array.from({ length: 4 }).map((_, i) => (
+            <Card key={i} className="h-[92px]">
+              <Skeleton className="h-full w-full" />
+            </Card>
           ))
+        ) : (
+          <>
+            <StatCard
+              icon="users"
+              label="Ranked Users"
+              value={stats.total}
+              accent="cyan"
+            />
+            <StatCard
+              icon="alert"
+              label="Critical Risk"
+              value={stats.critical}
+              accent="red"
+            />
+            <StatCard
+              icon="shield"
+              label="High Risk"
+              value={stats.high}
+              accent="amber"
+            />
+            <StatCard
+              icon="activity"
+              label="Avg Risk Score"
+              value={stats.avg.toFixed(1)}
+              accent="blue"
+            />
+          </>
         )}
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-4 gap-4">
-        <div className="bg-surface rounded-lg p-4 border border-surface-variant text-center">
-          <div className="text-2xl font-bold text-on-surface">{users.length}</div>
-          <div className="text-xs text-on-surface-muted">Total Users</div>
+      {/* ── Leaderboard panel ── */}
+      <Panel padding="p-0">
+        <div className="p-4 sm:p-5 border-b border-surface-variant">
+          <SectionHeader
+            icon={ShieldAlert}
+            title="Risk Ranking"
+            subtitle={
+              loading
+                ? 'Loading…'
+                : `${filteredSorted.length} of ${stats.total} users`
+            }
+          />
+
+          {/* Toolbar: search + filters */}
+          <div className="mt-4 flex flex-col sm:flex-row gap-3">
+            <div className="relative flex-1 min-w-0">
+              <Search
+                size={16}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-muted pointer-events-none"
+                aria-hidden="true"
+              />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search by user ID, name, role, or department…"
+                className="input w-full pl-9"
+                aria-label="Search users"
+              />
+            </div>
+
+            <div className="flex gap-3">
+              <label className="relative">
+                <span className="sr-only">Filter by risk level</span>
+                <select
+                  value={levelFilter}
+                  onChange={(e) => setLevelFilter(e.target.value)}
+                  className="input pr-8 capitalize cursor-pointer"
+                >
+                  {LEVELS.map((lvl) => (
+                    <option key={lvl} value={lvl}>
+                      {lvl === 'all' ? 'All levels' : lvl}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="relative flex items-center">
+                <ArrowUpDown
+                  size={14}
+                  className="absolute left-2.5 text-on-surface-muted pointer-events-none"
+                  aria-hidden="true"
+                />
+                <span className="sr-only">Sort users</span>
+                <select
+                  value={sortKey}
+                  onChange={(e) => setSortKey(e.target.value)}
+                  className="input pl-8 pr-8 cursor-pointer"
+                >
+                  {SORTS.map((s) => (
+                    <option key={s.key} value={s.key}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </div>
         </div>
-        <div className="bg-surface rounded-lg p-4 border border-surface-variant text-center">
-          <div className="text-2xl font-bold text-green-500">{users.filter(u => u.is_active).length}</div>
-          <div className="text-xs text-on-surface-muted">Active</div>
-        </div>
-        <div className="bg-surface rounded-lg p-4 border border-surface-variant text-center">
-          <div className="text-2xl font-bold text-yellow-500">{users.filter(u => (u.risk_score || 0) >= 40).length}</div>
-          <div className="text-xs text-on-surface-muted">Elevated Risk</div>
-        </div>
-        <div className="bg-surface rounded-lg p-4 border border-surface-variant text-center">
-          <div className="text-2xl font-bold text-red-500">{users.filter(u => (u.risk_score || 0) >= 80).length}</div>
-          <div className="text-xs text-on-surface-muted">Critical</div>
-        </div>
-      </div>
+
+        {/* Table / states */}
+        {loading ? (
+          <div className="p-4 sm:p-5 space-y-3">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div key={i} className="flex items-center gap-4">
+                <Skeleton className="h-8 w-8 rounded-lg flex-shrink-0" />
+                <Skeleton className="h-4 flex-1" />
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-1.5 w-24" />
+                <Skeleton className="h-5 w-16" />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <DataTable
+            columns={columns}
+            rows={filteredSorted}
+            rowKey={(u) => u.id}
+            onRowClick={goToForensics}
+            empty={
+              users.length === 0 ? (
+                <EmptyState
+                  icon={UsersIcon}
+                  title={error ? 'No data available' : 'No ranked users'}
+                  description={
+                    error
+                      ? 'The risk pipeline returned no users. Check that the API is running.'
+                      : 'No users have been scored by the risk pipeline yet.'
+                  }
+                  action={
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon={RefreshCw}
+                      onClick={() => loadData()}
+                    >
+                      Reload
+                    </Button>
+                  }
+                />
+              ) : (
+                <EmptyState
+                  icon={Search}
+                  title="No matching users"
+                  description="No users match your search or filter. Try broadening the criteria."
+                  action={
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setSearchTerm('')
+                        setLevelFilter('all')
+                      }}
+                    >
+                      Clear filters
+                    </Button>
+                  }
+                />
+              )
+            }
+          />
+        )}
+      </Panel>
+
+      {/* Footer hint */}
+      {!loading && filteredSorted.length > 0 && (
+        <p className="flex items-center gap-1.5 text-xs text-on-surface-muted">
+          <Fingerprint size={13} aria-hidden="true" />
+          Select a user to open their forensic timeline.
+        </p>
+      )}
     </div>
   )
 }

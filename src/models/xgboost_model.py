@@ -29,8 +29,7 @@ class XGBoostDetector(BaseEstimator, ClassifierMixin):
                 subsample=0.8,
                 colsample_bytree=0.8,
                 scale_pos_weight=10, # Handle imbalance manually
-                use_label_encoder=False, 
-                eval_metric='logloss', 
+                eval_metric='logloss',
                 random_state=self.random_state
             )
             self.best_estimator_.fit(X, y)

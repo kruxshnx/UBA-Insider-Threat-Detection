@@ -61,12 +61,26 @@ def load_and_normalize():
 
     # 6. Save Normalized Parquet
     master_log.write_parquet(f"{PROCESSED_DIR}/master_timeline.parquet")
-    
+
     # Save individual normalized files too
     df_logon.write_parquet(f"{PROCESSED_DIR}/logon.parquet")
     df_file.write_parquet(f"{PROCESSED_DIR}/file.parquet")
-    
+
     logger.info("Normalization Complete. Master Log: %d events.", len(master_log))
+
+    # 7. Build daily featured timeline (behavioral aggregates + peer features)
+    #    so the standard pipeline (generator -> normalization -> train -> run_risk)
+    #    always has an up-to-date featured_timeline for training/inference.
+    try:
+        from .feature_engineering import build_featured_timeline
+        master_path = f"{PROCESSED_DIR}/master_timeline.parquet"
+        users_path = f"{RAW_DIR}/users.csv"
+        out_csv = f"{PROCESSED_DIR}/featured_timeline.csv"
+        out_parquet = f"{PROCESSED_DIR}/featured_timeline.parquet"
+        build_featured_timeline(master_path, users_path, RAW_DIR, out_csv, out_parquet)
+        logger.info("Featured timeline built at %s", out_parquet)
+    except Exception as e:
+        logger.error("Feature engineering step failed: %s", e)
 
 if __name__ == "__main__":
     load_and_normalize()

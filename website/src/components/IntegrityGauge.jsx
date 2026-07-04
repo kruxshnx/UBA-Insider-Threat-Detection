@@ -6,10 +6,11 @@ import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts'
  * Shows how many employees are "In-Zone" (Productive) vs "Anomalous" (Risk)
  */
 
+// Matched to the risk-band tokens in index.css.
 const COLORS = {
-  inZone: '#10b981',    // Green
-  anomalous: '#f59e0b', // Yellow/Orange
-  critical: '#ef4444',  // Red
+  inZone: '#52e0a0',    // risk-low (emerald)
+  anomalous: '#f59e0b', // risk-high (orange)
+  critical: '#ff5a52',  // risk-critical (red)
 }
 
 const CustomizedCell = ({ x, y, innerRadius, outerRadius, startAngle, endAngle, fill, payload }) => {
@@ -60,16 +61,16 @@ export default function IntegrityGauge({ summary }) {
 
   const status = getStatus()
   const statusColor = {
-    healthy: 'text-emerald-400',
-    warning: 'text-amber-400',
-    critical: 'text-red-400',
+    healthy: 'text-success',
+    warning: 'text-tertiary',
+    critical: 'text-error',
   }[status]
 
   return (
-    <div className="bg-surface-high rounded-xl p-6 border border-outline-variant/20">
+    <div className="card p-6">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-semibold text-on-surface">Global Integrity Overview</h3>
-        <div className={`text-xs font-mono px-2 py-1 rounded-full bg-surface-low ${statusColor}`}>
+        <div className={`text-xs font-mono px-2 py-1 rounded-full bg-surface-low border border-surface-variant ${statusColor}`}>
           {status.toUpperCase()}
         </div>
       </div>
@@ -147,7 +148,7 @@ export default function IntegrityGauge({ summary }) {
         </div>
 
         {/* Risk Metrics */}
-        <div className="bg-surface-low rounded-lg p-4 space-y-2">
+        <div className="well p-4 space-y-2">
           <div>
             <div className="text-xs text-text-muted">Avg Risk Score</div>
             <div className="text-lg font-bold font-mono text-on-surface">

@@ -54,10 +54,14 @@ class RoleLSTMTrainer:
         self.threshold_method = self.threshold_config.get('method', 'percentile')
         self.threshold_percentile = self.threshold_config.get('percentile', 99.5)
         
+        # CONTRACT: must stay IDENTICAL to run_risk.py feature_cols and match the
+        # numeric columns produced by feature_engineering.py.
         self.feature_cols = [
             'day_of_week',
-            'far', 'eds', 'iav', 'oaf', 
-            'login_entropy', 'file_count', 'email_count'
+            'far', 'eds', 'iav', 'oaf',
+            'login_entropy', 'file_count', 'email_count',
+            'file_copy_count', 'usb_count', 'removable_media_count',
+            'delete_count', 'after_hours_count', 'after_hours_ratio', 'event_count'
         ]
     
     def load_data(self) -> Tuple[pd.DataFrame, Dict[str, str]]:
@@ -261,7 +265,7 @@ class RoleLSTMTrainer:
                 
                 torch.save(model.state_dict(), model_path)
                 joblib.dump(scaler, scaler_path)
-                with open(metadata_path, 'w') as f:
+                with open(metadata_path, 'w', encoding='utf-8') as f:
                     json.dump(metadata, f, indent=2)
                 
                 print(f"  Saved: {model_path}")
@@ -276,7 +280,7 @@ class RoleLSTMTrainer:
             if model:
                 torch.save(model.state_dict(), os.path.join(MODEL_SAVE_DIR, "lstm_global.pth"))
                 joblib.dump(scaler, os.path.join(MODEL_SAVE_DIR, "scaler_global.joblib"))
-                with open(os.path.join(MODEL_SAVE_DIR, "metadata_global.json"), 'w') as f:
+                with open(os.path.join(MODEL_SAVE_DIR, "metadata_global.json"), 'w', encoding='utf-8') as f:
                     json.dump(metadata, f, indent=2)
                 results['global'] = metadata
         

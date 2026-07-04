@@ -223,14 +223,10 @@ class DynamicRoleEntropyMapper:
             return 50.0  # Default to median if no baseline
         
         baseline_array = np.array(baseline_entropies)
-        
-        # Calculate percentile
-        percentile = scipy_entropy([np.sum(baseline_array <= composite_entropy), 
-                                    np.sum(baseline_array > composite_entropy)], base=2)
-        
-        # Simpler: just calculate percentage of baseline values below current
+
+        # Percentage of baseline values at or below the current entropy
         percentile = (np.sum(baseline_array <= composite_entropy) / len(baseline_array)) * 100
-        
+
         return percentile
     
     def interpret_entropy_risk(
@@ -243,15 +239,21 @@ class DynamicRoleEntropyMapper:
         
         Takes role into account - some roles naturally have higher entropy.
         """
-        # Adjust thresholds based on role
+        # Adjust thresholds based on role. Roles that naturally exhibit
+        # higher entropy (multiplier > 1.0) should require a higher
+        # percentile before triggering a given risk level, so we shift the
+        # thresholds upward rather than inflating the percentile itself
+        # (which could push it past 100 and break the comparison).
         role_mult = self.role_baseline_multipliers.get(role, 1.0)
-        adjusted_percentile = percentile * role_mult
-        
-        if adjusted_percentile >= self.high_entropy_threshold:
+        low_threshold = min(100.0, self.low_entropy_threshold * role_mult)
+        medium_threshold = min(100.0, self.medium_entropy_threshold * role_mult)
+        high_threshold = min(100.0, self.high_entropy_threshold * role_mult)
+
+        if percentile >= high_threshold:
             return "Critical"
-        elif adjusted_percentile >= self.medium_entropy_threshold:
+        elif percentile >= medium_threshold:
             return "High"
-        elif adjusted_percentile >= self.low_entropy_threshold:
+        elif percentile >= low_threshold:
             return "Medium"
         else:
             return "Low"

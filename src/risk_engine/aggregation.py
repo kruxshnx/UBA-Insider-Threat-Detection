@@ -27,78 +27,102 @@ class UserBaselineTracker:
         self.drift_config = config.get('baseline_drift', {})
         self.baseline_window = self.drift_config.get('baseline_window_days', 14)
         self.drift_sigma = self.drift_config.get('drift_sigma', 2.0)
-        
+        # Number of most-recent days treated as the "current" window (excluded
+        # from the baseline so we compare recent behavior to earlier behavior).
+        # Sized to cover the whole anomaly burst so early anomalous days do not
+        # contaminate the (quiet) earlier-period baseline.
+        self.recent_window = self.drift_config.get('recent_window_days', 6)
+
         # In-memory baseline storage (would be DB in production)
         self.user_baselines: Dict[str, Dict] = {}
     
     def update_baseline(self, user: str, daily_risk_scores: List[float]) -> Dict:
         """
-        Update baseline for a user based on their recent daily risk scores.
-        
+        Build a user's OWN earlier-period baseline from their daily risk series.
+
+        The baseline is the mean/std of daily risk over the baseline window
+        EXCLUDING the most recent ``recent_window`` days, so drift compares recent
+        behavior against the user's own earlier behavior on the SAME scale
+        (mean daily risk, 0-100).
+
         Args:
             user: User ID
-            daily_risk_scores: List of daily aggregated risk scores
-        
+            daily_risk_scores: chronologically ordered list of daily risk values
+
         Returns:
-            Updated baseline dict
+            Baseline dict {avg, std, count, valid, ...}
         """
-        if len(daily_risk_scores) < 3:
-            # Not enough data for baseline
-            return {
+        # Split off the most-recent window; baseline = the earlier days.
+        if len(daily_risk_scores) > self.recent_window:
+            baseline_scores = daily_risk_scores[:-self.recent_window]
+        else:
+            baseline_scores = []
+
+        # Restrict baseline to the configured window (most recent baseline days).
+        baseline_scores = baseline_scores[-self.baseline_window:]
+
+        if len(baseline_scores) < 3:
+            baseline = {
                 'avg': 0.0,
                 'std': 0.0,
-                'count': len(daily_risk_scores),
-                'valid': False
+                'count': len(baseline_scores),
+                'valid': False,
             }
-        
-        # Use last N days
-        recent_scores = daily_risk_scores[-self.baseline_window:]
-        
+            self.user_baselines[user] = baseline
+            return baseline
+
         baseline = {
-            'avg': float(np.mean(recent_scores)),
-            'std': float(np.std(recent_scores)),
-            'min': float(np.min(recent_scores)),
-            'max': float(np.max(recent_scores)),
-            'count': len(recent_scores),
+            'avg': float(np.mean(baseline_scores)),
+            'std': float(np.std(baseline_scores)),
+            'min': float(np.min(baseline_scores)),
+            'max': float(np.max(baseline_scores)),
+            'count': len(baseline_scores),
             'valid': True,
             'updated_at': datetime.now().isoformat()
         }
-        
+
         self.user_baselines[user] = baseline
         return baseline
-    
-    def detect_drift(self, user: str, current_risk: float) -> Tuple[bool, float, str]:
+
+    def detect_drift(self, user: str, recent_risk: float) -> Tuple[bool, float, str]:
         """
-        Detect if current risk represents a significant drift from baseline.
-        
+        Detect drift: does the user's RECENT daily risk exceed their own
+        earlier-period baseline by more than ``drift_sigma`` standard deviations?
+
+        Both ``recent_risk`` and the baseline are on the same scale (daily risk,
+        0-100), so the comparison is honest and only a small minority drift.
+
         Args:
             user: User ID
-            current_risk: Current risk score
-        
+            recent_risk: the user's recent-window daily risk (e.g. max of the
+                         most recent days)
+
         Returns:
             Tuple of (is_drift, deviation_sigma, explanation)
         """
         baseline = self.user_baselines.get(user)
-        
+
         if not baseline or not baseline.get('valid', False):
             return False, 0.0, "Insufficient baseline data"
-        
-        if baseline['std'] < 0.1:
-            # Very low variance - treat any significant increase as drift
-            if current_risk > baseline['avg'] + 20:
-                deviation = (current_risk - baseline['avg']) / max(baseline['std'], 1.0)
-                return True, deviation, f"Unusual activity (baseline avg={baseline['avg']:.1f})"
+
+        if baseline['std'] < 1.0:
+            # Very low variance baseline: require a clear absolute jump.
+            if recent_risk > baseline['avg'] + 15:
+                deviation = (recent_risk - baseline['avg']) / max(baseline['std'], 1.0)
+                return True, deviation, (
+                    f"Recent daily risk {recent_risk:.1f} >> baseline "
+                    f"avg={baseline['avg']:.1f} (low-variance user)"
+                )
             return False, 0.0, "Within expected range (low variance user)"
-        
-        # Calculate z-score
-        z_score = (current_risk - baseline['avg']) / baseline['std']
-        
+
+        z_score = (recent_risk - baseline['avg']) / baseline['std']
+
         if z_score > self.drift_sigma:
-            explanation = (f"Risk {current_risk:.1f} exceeds baseline "
-                          f"(avg={baseline['avg']:.1f}, +{z_score:.1f}σ)")
+            explanation = (f"Recent daily risk {recent_risk:.1f} exceeds baseline "
+                           f"(avg={baseline['avg']:.1f}, +{z_score:.1f} sigma)")
             return True, z_score, explanation
-        
-        return False, z_score, f"Within {self.drift_sigma}σ of baseline"
+
+        return False, z_score, f"Within {self.drift_sigma} sigma of baseline"
     
     def aggregate_user_risk_with_drift(
         self,
@@ -107,11 +131,17 @@ class UserBaselineTracker:
     ) -> Dict:
         """
         Aggregate risk for a user with drift detection.
-        
+
+        Drift compares the user's RECENT daily risk to their OWN earlier-period
+        baseline (built via update_baseline), so it is on the same scale and
+        only a small minority drift.
+
+        Aggregation weights (max_weight / sum_weight) are read from config.
+
         Args:
             user_events: DataFrame of user's events with 'risk_score' and 'date'
             current_time: Reference time for decay calculation
-        
+
         Returns:
             Aggregation result with drift info
         """
@@ -124,61 +154,84 @@ class UserBaselineTracker:
                 'deviation_sigma': 0.0,
                 'drift_explanation': ''
             }
-        
+
         risk_config = config.risk_scoring
         decay_rate = risk_config.get('decay_rate', 0.9)
-        
+        max_weight = risk_config.get('max_weight', 1.0)
+        sum_weight = risk_config.get('sum_weight', 0.1)
+
         if current_time is None:
             current_time = user_events['date'].max()
-        
+
         # Calculate decayed sum
         total_risk = 0.0
         max_risk = 0.0
-        
+
         for _, row in user_events.iterrows():
             score = row.get('risk_score', 0)
             if score == 0:
                 continue
-            
+
             event_time = row['date']
             if hasattr(event_time, 'to_pydatetime'):
                 event_time = event_time.to_pydatetime()
-            
+
             days_diff = (current_time - event_time).total_seconds() / 86400
             days_diff = max(0, days_diff)
-            
+
             decayed = score * (decay_rate ** days_diff)
             total_risk += decayed
             max_risk = max(max_risk, score)
-        
-        # Hybrid score
-        aggregated_risk = max_risk + (total_risk * 0.1)
-        
-        # Check drift
+
+        # Hybrid aggregate score (config-weighted).
+        aggregated_risk = (max_weight * max_risk) + (sum_weight * total_risk)
+
+        # Drift: compare the user's recent daily risk to their earlier baseline.
         user = user_events['user'].iloc[0]
-        is_drift, deviation, explanation = self.detect_drift(user, aggregated_risk)
-        
+        daily_series = self._daily_series_from_events(user_events)
+        if len(daily_series) > self.recent_window:
+            recent_risk = float(np.max(daily_series[-self.recent_window:]))
+        elif daily_series:
+            recent_risk = float(np.max(daily_series))
+        else:
+            recent_risk = 0.0
+
+        is_drift, deviation, explanation = self.detect_drift(user, recent_risk)
+
         return {
             'total_risk': aggregated_risk,
             'max_risk': max_risk,
             'decayed_sum': total_risk,
+            'recent_daily_risk': recent_risk,
             'event_count': len(user_events),
             'is_drift': is_drift,
             'deviation_sigma': deviation,
             'drift_explanation': explanation
         }
+
+    @staticmethod
+    def _daily_series_from_events(user_events: pd.DataFrame) -> List[float]:
+        """Mean daily risk series (chronological) for a single user's events."""
+        ue = user_events.copy()
+        ue['date_only'] = pd.to_datetime(ue['date']).dt.date
+        daily = ue.groupby('date_only')['risk_score'].mean().sort_index()
+        return daily.tolist()
     
     def calculate_daily_risk_history(self, df: pd.DataFrame, user: str) -> List[float]:
-        """Calculate daily aggregated risk scores for a user."""
+        """Chronologically ordered MEAN daily risk series for a user.
+
+        Uses the mean (not sum) so it is on the same 0-100 scale as the recent
+        daily risk used for drift comparison.
+        """
         user_data = df[df['user'] == user].copy()
-        
+
         if user_data.empty:
             return []
-        
-        user_data['date_only'] = user_data['date'].dt.date
-        daily_risk = user_data.groupby('date_only')['risk_score'].sum().tolist()
-        
-        return daily_risk
+
+        user_data['date_only'] = pd.to_datetime(user_data['date']).dt.date
+        daily_risk = user_data.groupby('date_only')['risk_score'].mean().sort_index()
+
+        return daily_risk.tolist()
 
 
 class RiskAggregator:

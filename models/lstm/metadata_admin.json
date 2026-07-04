@@ -1,13 +1,13 @@
 {
   "role": "Admin",
-  "n_sequences": 144,
-  "n_features": 7,
-  "final_loss": 0.6724306543668112,
-  "threshold": 3.2146308422088623,
+  "n_sequences": 140,
+  "n_features": 15,
+  "final_loss": 0.5820085406303406,
+  "threshold": 1.8831262588500977,
   "threshold_method": "percentile",
-  "error_mean": 0.7110873460769653,
-  "error_std": 0.5371763110160828,
-  "error_p50": 0.5588101148605347,
-  "error_p95": 1.506784439086914,
-  "error_p99": 3.196107864379883
+  "error_mean": 0.5953458547592163,
+  "error_std": 0.22826442122459412,
+  "error_p50": 0.5500854253768921,
+  "error_p95": 0.9693388938903809,
+  "error_p99": 1.56975257396698
 }

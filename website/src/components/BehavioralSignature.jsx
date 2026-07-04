@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import {
   ScatterChart, Scatter, XAxis, YAxis, ZAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  BarChart, Bar, Cell,
-  Heatmap, Rectangle
 } from 'recharts'
 import { fetchIntegritySummary, fetchUserTelemetry } from '../services/api'
 

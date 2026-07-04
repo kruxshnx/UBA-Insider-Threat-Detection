@@ -1,12 +1,14 @@
 """
 User Management API - Create, read, update employees and assign roles.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from typing import List, Dict, Optional
 from datetime import datetime
 import logging
 import sqlite3
 import os
+
+from src.api.security import require_role
 
 logger = logging.getLogger("uba.api.users")
 
@@ -15,18 +17,33 @@ router = APIRouter(tags=["Users"])
 # Database path
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "data", "telemetry.db")
 
+# Guard so the users table is created at most once per process even if
+# ensure_users_table() is called lazily from several endpoints.
+_users_table_ready = False
+
+
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
-@router.on_event("startup")
-async def create_users_table():
-    """Create users table if not exists."""
+
+def ensure_users_table() -> None:
+    """
+    Create the ``users`` table (and a default admin row) if they do not exist.
+
+    Invoked from the application lifespan in ``src.api.main`` on startup, and
+    lazily on first mutating call as a safety net. Replaces the old
+    ``@router.on_event("startup")`` handler, which is deprecated on routers and
+    never fires when the router is mounted via ``include_router``.
+    """
+    global _users_table_ready
+    if _users_table_ready:
+        return
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        
+
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id TEXT PRIMARY KEY,
@@ -42,20 +59,22 @@ async def create_users_table():
             productivity_score REAL DEFAULT 1.0
         )
         """)
-        
+
         # Create default admin user
         cursor.execute("""
         INSERT OR IGNORE INTO users (user_id, name, email, role, department, created_at)
         VALUES ('admin', 'System Administrator', 'admin@company.com', 'Admin', 'IT', ?)
         """, (datetime.now().isoformat(),))
-        
+
         conn.commit()
         conn.close()
+        _users_table_ready = True
         logger.info("Users table initialized")
     except Exception as e:
         logger.error(f"Error creating users table: {e}")
 
-@router.post("/users/", response_model=dict)
+
+@router.post("/users/", response_model=dict, dependencies=[Depends(require_role("Admin"))])
 async def create_user(
     user_id: str,
     name: str,
@@ -64,10 +83,11 @@ async def create_user(
     department: str = "General",
     manager_id: Optional[str] = None
 ):
-    """Create a new employee/user."""
+    """Create a new employee/user. Requires Admin role (demo RBAC)."""
+    ensure_users_table()  # lazy safety net if lifespan init was skipped
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     try:
         cursor.execute("""
         INSERT INTO users (user_id, name, email, role, department, created_at, manager_id)
@@ -185,7 +205,7 @@ async def get_user(user_id: str):
         "productivity_score": row["productivity_score"] or 1.0
     }
 
-@router.put("/users/{user_id}", response_model=dict)
+@router.put("/users/{user_id}", response_model=dict, dependencies=[Depends(require_role("Admin"))])
 async def update_user(
     user_id: str,
     name: Optional[str] = None,
@@ -236,9 +256,9 @@ async def update_user(
     
     return {"status": "success", "message": f"User {user_id} updated"}
 
-@router.delete("/users/{user_id}", response_model=dict)
+@router.delete("/users/{user_id}", response_model=dict, dependencies=[Depends(require_role("Admin"))])
 async def deactivate_user(user_id: str):
-    """Deactivate a user (soft delete)."""
+    """Deactivate a user (soft delete). Requires Admin role (demo RBAC)."""
     conn = get_db_connection()
     cursor = conn.cursor()
     

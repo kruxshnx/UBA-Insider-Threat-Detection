@@ -23,7 +23,7 @@ echo   API Server is running!
 echo ============================================================
 echo.
 echo   API Docs: http://localhost:8000/docs
-echo   API Health: http://localhost:8000/api/v1/health
+echo   API Health: http://localhost:8000/health
 echo.
 echo Next Steps:
 echo   1. Open http://localhost:8000/docs to view API

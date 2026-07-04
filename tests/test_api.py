@@ -212,16 +212,38 @@ class TestTimelineEndpoint:
         assert data["events"] == []
 
     def test_timeline_event_shape(self):
-        """Timeline events have correct fields."""
+        """Timeline events have the corrected fields, incl. structured details.
+
+        The timeline endpoint now returns real telemetry-derived events whose
+        `details` is a STRUCTURED object (mouse/keystroke/productivity metrics),
+        not the old broken/free-text value. Assert the whole event shape and the
+        details object when events are present.
+        """
         r = client.get("/api/users/U105/timeline")
+        assert r.status_code == 200
         data = r.json()
+        assert data["user_id"] == "U105"
+        # counts are internally consistent
+        assert data["anomaly_count"] <= data["total_events"]
+
         if data["events"]:
             event = data["events"][0]
-            assert "timestamp" in event
-            assert "event_type" in event
-            assert "activity" in event
-            assert "risk_score" in event
-            assert "is_anomaly" in event
+            for field in (
+                "timestamp", "event_type", "activity",
+                "anomaly_score", "risk_score", "is_anomaly", "details",
+            ):
+                assert field in event, f"missing field: {field}"
+
+            assert isinstance(event["is_anomaly"], bool)
+            # is_anomaly is derived from the risk threshold (>= 50).
+            assert event["is_anomaly"] == (event["risk_score"] >= 50)
+
+            # details is now a structured metrics object (not a bare string).
+            details = event["details"]
+            assert isinstance(details, dict)
+            assert "mouse_velocity" in details
+            assert "keystroke_flight_ms" in details
+            assert "productivity" in details
 
     def test_timeline_pagination(self):
         """Timeline supports limit and offset params."""

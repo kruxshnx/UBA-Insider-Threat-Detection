@@ -56,10 +56,14 @@ class RoleBasedInference:
         self.metadata: Dict[str, Dict] = {}
         self.user_roles: Dict[str, str] = {}
 
+        # CONTRACT: must stay IDENTICAL to train_role_lstm.py feature_cols and
+        # match the numeric columns produced by feature_engineering.py.
         self.feature_cols = [
             'day_of_week',
             'far', 'eds', 'iav', 'oaf',
-            'login_entropy', 'file_count', 'email_count'
+            'login_entropy', 'file_count', 'email_count',
+            'file_copy_count', 'usb_count', 'removable_media_count',
+            'delete_count', 'after_hours_count', 'after_hours_ratio', 'event_count'
         ]
 
     def load_models(self) -> None:
@@ -73,7 +77,7 @@ class RoleBasedInference:
 
             if os.path.exists(model_path):
                 if os.path.exists(metadata_path):
-                    with open(metadata_path, 'r') as f:
+                    with open(metadata_path, 'r', encoding='utf-8') as f:
                         self.metadata[role] = json.load(f)
                     n_features = self.metadata[role].get('n_features', len(self.feature_cols))
                 else:
@@ -208,6 +212,14 @@ def run_risk_pipeline():
     df['lstm_score'] = anomaly_scores
     logger.info("  Anomaly scores calculated. Non-zero: %d", (anomaly_scores > 0).sum())
 
+    # Build a per-user role-metadata lookup so base-risk can be normalised
+    # relative to each role's reconstruction-error distribution.
+    def _meta_for_user(user: str) -> Dict:
+        role = inference.user_roles.get(user, 'Employee').lower()
+        if role in inference.metadata:
+            return inference.metadata[role]
+        return inference.metadata.get('global', {})
+
     # 3. Calculate Risk Scores
     logger.info("[3/5] Calculating risk scores with explainability...")
     risk_engine.load_user_metadata(USERS_PATH)
@@ -219,7 +231,10 @@ def run_risk_pipeline():
     alert_severities = []
 
     for idx, row in df.iterrows():
-        risk, explanation = risk_engine.calculate_risk_score(row, anomaly_scores[idx])
+        role_meta = _meta_for_user(row.get('user', ''))
+        risk, explanation = risk_engine.calculate_risk_score(
+            row, anomaly_scores[idx], role_meta=role_meta
+        )
         risk_scores.append(risk)
         explanations.append(explanation.text_explanation)
         mitre_tactics.append(explanation.mitre_tactic)

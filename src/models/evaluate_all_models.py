@@ -7,7 +7,7 @@ Evaluates ALL trained models in the UBA Insider Threat Detection system:
   3. XGBoost (Hybrid)
   4. Bi-LSTM with Attention (Hybrid)
 
-Ground Truth: User U105 after day 25 = malicious insider threat.
+Ground Truth: User U105 on/after the configured malicious_start_day = insider threat.
 """
 
 import pandas as pd
@@ -33,6 +33,11 @@ from utils.config import config
 
 logger = logging.getLogger("uba.models.evaluate")
 
+# ── Reproducibility ──────────────────────────────────────────────────────────
+RANDOM_SEED = 42
+np.random.seed(RANDOM_SEED)
+torch.manual_seed(RANDOM_SEED)
+
 
 def _get_ground_truth_config() -> dict:
     """Read ground truth scenario from config.yaml."""
@@ -42,6 +47,26 @@ def _get_ground_truth_config() -> dict:
         'malicious_user': scenarios.get('malicious_user', 'U105'),
         'malicious_start_day': scenarios.get('malicious_start_day', '2024-01-20'),
     }
+
+
+def _label_by_datetime(user_series, date_series) -> np.ndarray:
+    """
+    Unified ground-truth labeller: flag the configured malicious user on/after
+    the configured malicious_start_day, using real datetime comparison.
+
+    Args:
+        user_series: sequence of user IDs (pandas Series or array-like)
+        date_series: sequence of dates/timestamps parseable by pd.to_datetime
+
+    Returns:
+        int numpy array of labels (1 = malicious instance, 0 = benign)
+    """
+    gt = _get_ground_truth_config()
+    users = np.asarray(user_series)
+    dates = pd.to_datetime(pd.Series(np.asarray(date_series)), errors='coerce')
+    start_day = pd.to_datetime(gt['malicious_start_day'])
+    mask = (users == gt['malicious_user']) & (dates >= start_day).to_numpy()
+    return mask.astype(int)
 
 # Setup paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -176,17 +201,13 @@ def evaluate_baseline():
     
     y_pred = (scores < threshold).astype(int)
     
-    # Ground truth from config
-    gt = _get_ground_truth_config()
-    start_date = df['date'].min()
-    is_threat_time = (df['date'] - start_date).dt.days > 25
-    is_target = df['user'] == gt['malicious_user']
-    y_true = (is_target & is_threat_time).astype(int)
-    
+    # Ground truth from config (unified: U105 on/after configured start day)
+    y_true = _label_by_datetime(df['user'], df['date'])
+
     print(f"  Total samples: {len(y_true)}")
     print(f"  Ground truth anomalies: {y_true.sum()}")
     print(f"  Detected anomalies: {y_pred.sum()}")
-    
+
     # Use negative scores as anomaly scores (higher = more anomalous)
     anomaly_scores = -scores
     
@@ -230,12 +251,8 @@ def evaluate_lstm_ae():
     # Scale
     df[feature_cols] = scaler.transform(df[feature_cols])
     
-    # Ground truth from config
-    gt = _get_ground_truth_config()
-    start_date = df['date'].min()
-    is_threat_time = (df['date'] - start_date).dt.days > 25
-    is_target = df['user'] == gt['malicious_user']
-    df['is_anomaly'] = (is_target & is_threat_time).astype(int)
+    # Ground truth from config (unified: U105 on/after configured start day)
+    df['is_anomaly'] = _label_by_datetime(df['user'], df['date'])
     
     # Create sequences
     print("  Creating sequences...")
@@ -312,20 +329,15 @@ def evaluate_xgboost():
     # Load data (matching train_hybrid.py)
     print("  Loading feature data...")
     df_raw = pd.read_csv(FEATURED_TIMELINE_PATH)
-    
-    users = np.array(df_raw['user'])
-    days = np.array(df_raw['day'])
-    
-    # Create labels from config
-    gt = _get_ground_truth_config()
-    labels = np.zeros(len(users), dtype=int)
-    mask = (users == gt['malicious_user']) & (days > gt['malicious_start_day'])
-    labels[mask] = 1
-    
+
+    # Create labels from config (unified: U105 on/after configured start day,
+    # via real datetime comparison rather than string-vs-string)
+    labels = _label_by_datetime(df_raw['user'], df_raw['day'])
+
     feature_cols = ['far', 'eds', 'iav', 'oaf', 'login_entropy', 'file_count', 'email_count']
     X = np.array([df_raw[col].values for col in feature_cols]).T.astype(float)
     y = labels
-    
+
     # Split (matching training)
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
     
@@ -380,17 +392,16 @@ def evaluate_bilstm():
     
     users = np.array(df_raw['user'])
     days = np.array(df_raw['day'])
-    
-    # Create labels from config
+
+    # Create labels from config (unified: U105 on/after configured start day,
+    # via real datetime comparison rather than string-vs-string)
     gt = _get_ground_truth_config()
-    labels = np.zeros(len(users), dtype=int)
-    mask = (users == gt['malicious_user']) & (days > gt['malicious_start_day'])
-    labels[mask] = 1
-    
+    labels = _label_by_datetime(df_raw['user'], df_raw['day'])
+
     feature_cols = ['far', 'eds', 'iav', 'oaf', 'login_entropy', 'file_count', 'email_count']
     X = np.array([df_raw[col].values for col in feature_cols]).T.astype(float)
     y = labels
-    
+
     # Scale with same scaler as training
     print("  Loading scaler...")
     scaler = joblib.load(scaler_path)

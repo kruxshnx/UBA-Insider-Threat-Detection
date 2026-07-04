@@ -1,428 +1,512 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Activity, Users, AlertTriangle, TrendingUp, Clock, RefreshCw,
-  ShieldAlert, BarChart2, Monitor, ExternalLink, Zap, Eye
+  Users, ShieldAlert, Activity, Gauge, Crosshair, RefreshCw, Clock,
+  AlertTriangle, Eye, Monitor, ExternalLink, Radar, ServerCrash, WifiOff,
 } from 'lucide-react'
-import { fetchUsers, fetchIntegritySummary, fetchStats, fetchRiskyUsers, fetchAlerts } from '../services/api'
+import {
+  Card, Panel, SectionHeader, StatCard, RiskBadge, SeverityPill,
+  DataTable, RiskBar, EmptyState, LoadingState, Button,
+} from '../components/ui'
+import { riskBand, riskColor } from '../lib/utils'
+import {
+  fetchStats, fetchRiskyUsers, fetchAlerts, fetchUsers, fetchIntegritySummary,
+} from '../services/api'
 
-const getRiskColor = (score) => {
-  if (score >= 80) return 'text-red-500'
-  if (score >= 60) return 'text-orange-400'
-  if (score >= 40) return 'text-yellow-400'
-  return 'text-green-400'
-}
+const POLL_MS = 5000
 
-const getRiskBg = (score) => {
-  if (score >= 80) return 'bg-red-500/10 border-red-500/20'
-  if (score >= 60) return 'bg-orange-500/10 border-orange-500/20'
-  if (score >= 40) return 'bg-yellow-500/10 border-yellow-500/20'
-  return 'bg-green-500/10 border-green-500/20'
-}
+/* ── Small helpers (pure, defensive) ─────────────────────────────────────── */
 
-const getRiskDot = (score) => {
-  if (score >= 80) return 'bg-red-500'
-  if (score >= 60) return 'bg-orange-400'
-  if (score >= 40) return 'bg-yellow-400'
-  return 'bg-green-400'
-}
+const num = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d)
 
-const getRiskBarColor = (score) => {
-  if (score >= 80) return 'bg-red-500'
-  if (score >= 60) return 'bg-orange-400'
-  if (score >= 40) return 'bg-yellow-400'
-  return 'bg-green-400'
-}
-
-const getRiskBadge = (level) => {
-  const l = (level || 'Low').toLowerCase()
-  if (l === 'critical') return 'bg-red-500/20 text-red-400 border border-red-500/40'
-  if (l === 'high')     return 'bg-orange-500/20 text-orange-400 border border-orange-500/40'
-  if (l === 'medium')   return 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/40'
-  return 'bg-green-500/20 text-green-400 border border-green-500/40'
-}
-
-const getSeverityBadge = (severity) => {
-  const s = (severity || '').toLowerCase()
-  if (s === 'critical') return 'bg-red-500/20 text-red-400 border border-red-500/30'
-  if (s === 'high') return 'bg-orange-500/20 text-orange-400 border border-orange-500/30'
-  return 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30'
-}
-
-const getSessionStatus = (lastSeen) => {
-  if (!lastSeen) return { label: 'Offline', dot: 'bg-gray-500', text: 'text-gray-400' }
-  const diffMs = Date.now() - new Date(lastSeen).getTime()
-  const diffMin = diffMs / 60000
-  if (diffMin < 2)  return { label: 'Active',   dot: 'bg-green-400 animate-pulse', text: 'text-green-400' }
-  if (diffMin < 15) return { label: 'Idle',     dot: 'bg-yellow-400',              text: 'text-yellow-400' }
-  return                    { label: 'Offline',  dot: 'bg-gray-500',                text: 'text-gray-400' }
-}
-
-const relativeTime = (lastSeen) => {
-  if (!lastSeen) return '—'
-  const diffMs = Date.now() - new Date(lastSeen).getTime()
-  const diffMin = Math.floor(diffMs / 60000)
-  if (diffMin < 1)  return 'Just now'
+const relativeTime = (ts) => {
+  if (!ts) return '—'
+  const t = new Date(ts).getTime()
+  if (Number.isNaN(t)) return '—'
+  const diffMin = Math.floor((Date.now() - t) / 60000)
+  if (diffMin < 1) return 'just now'
   if (diffMin < 60) return `${diffMin}m ago`
   const diffH = Math.floor(diffMin / 60)
-  if (diffH < 24)   return `${diffH}h ago`
-  return new Date(lastSeen).toLocaleDateString()
+  if (diffH < 24) return `${diffH}h ago`
+  return new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
-const cleanAppName = (app) => {
-  if (!app || app === '—') return '—'
-  return app.replace('.exe', '').replace(/^\./, '')
+const sessionState = (lastSeen) => {
+  if (!lastSeen) return { key: 'offline', label: 'Offline', dot: 'bg-outline' }
+  const t = new Date(lastSeen).getTime()
+  if (Number.isNaN(t)) return { key: 'offline', label: 'Offline', dot: 'bg-outline' }
+  const diffMin = (Date.now() - t) / 60000
+  if (diffMin < 2) return { key: 'active', label: 'Active', dot: 'bg-success animate-pulse' }
+  if (diffMin < 15) return { key: 'idle', label: 'Idle', dot: 'bg-tertiary' }
+  return { key: 'offline', label: 'Offline', dot: 'bg-outline' }
 }
+
+const cleanApp = (app) => {
+  if (!app || app === '—' || app === 'unknown') return null
+  return app.replace(/\.exe$/i, '').replace(/^\./, '')
+}
+
+const initial = (s) => (s && typeof s === 'string' ? s.charAt(0).toUpperCase() : '?')
+
+/* ── Page ─────────────────────────────────────────────────────────────────── */
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const [realtimeUsers, setRealtimeUsers] = useState([])
-  const [integrity, setIntegrity] = useState(null)
+
   const [stats, setStats] = useState(null)
   const [topThreats, setTopThreats] = useState([])
   const [recentAlerts, setRecentAlerts] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [lastUpdate, setLastUpdate] = useState(new Date())
+  const [sessions, setSessions] = useState([])
+  const [integrity, setIntegrity] = useState(null)
 
-  const loadData = async () => {
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
+  const [lastUpdate, setLastUpdate] = useState(null)
+
+  const loadData = useCallback(async () => {
     try {
-      const [usersData, integrityData, statsData, threatsData, alertsData] = await Promise.all([
-        fetchUsers(),
-        fetchIntegritySummary(),
+      const [statsData, threatsData, alertsData, usersData, integrityData] = await Promise.all([
         fetchStats(),
-        fetchRiskyUsers(5),
-        fetchAlerts({ limit: 5 }),
+        fetchRiskyUsers(6),
+        fetchAlerts({ limit: 6 }),
+        fetchUsers().catch(() => []),
+        fetchIntegritySummary().catch(() => null),
       ])
-      if (usersData && Array.isArray(usersData)) setRealtimeUsers(usersData)
-      if (integrityData) setIntegrity(integrityData)
+
+      // Treat total loss of the primary pipeline as an error banner.
+      const primaryDown = !statsData && (!Array.isArray(threatsData) || threatsData.length === 0)
+      setError(primaryDown)
+
       if (statsData) setStats(statsData)
-      if (threatsData && Array.isArray(threatsData)) setTopThreats(threatsData)
-      if (alertsData?.alerts) setRecentAlerts(alertsData.alerts)
+      setTopThreats(Array.isArray(threatsData) ? threatsData : [])
+      setRecentAlerts(Array.isArray(alertsData?.alerts) ? alertsData.alerts : [])
+      setSessions(Array.isArray(usersData) ? usersData : [])
+      setIntegrity(integrityData || null)
       setLastUpdate(new Date())
-      setLoading(false)
-    } catch (error) {
-      console.error('Dashboard load error:', error)
+    } catch (err) {
+      console.error('Dashboard load error:', err)
+      setError(true)
+    } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     loadData()
-    const interval = setInterval(loadData, 5000)
-    return () => clearInterval(interval)
-  }, [])
+    const iv = setInterval(loadData, POLL_MS)
+    return () => clearInterval(iv)
+  }, [loadData])
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-center">
-          <Activity className="w-12 h-12 animate-spin text-primary mx-auto mb-4" />
-          <p className="text-on-surface">Loading real-time data...</p>
-        </div>
-      </div>
-    )
+  /* ── Derived KPI values (honest fallbacks; never fabricated) ───────────── */
+
+  const totalUsers = stats?.total_users ?? topThreats.length ?? 0
+  const highRiskUsers = stats?.high_risk_users ?? topThreats.filter(u => num(u.total_risk_score) >= 50).length
+  const totalEvents = num(stats?.total_events, 0)
+  const highRiskEvents = num(stats?.high_risk_events, 0)
+  const avgRisk = num(stats?.avg_risk_score, 0)
+  const topThreatUser = stats?.top_threat && stats.top_threat !== 'None' ? stats.top_threat : null
+
+  // Risk distribution computed from the real risky-users list — no invented series.
+  const distribution = useMemo(() => {
+    const bands = { critical: 0, high: 0, medium: 0, low: 0 }
+    topThreats.forEach(u => { bands[riskBand(num(u.total_risk_score))] += 1 })
+    return bands
+  }, [topThreats])
+
+  const activeSessions = useMemo(
+    () => sessions.filter(u => sessionState(u.last_seen).key === 'active').length,
+    [sessions],
+  )
+
+  /* ── Loading (first paint only) ────────────────────────────────────────── */
+  if (loading && !lastUpdate) {
+    return <LoadingState label="Loading security telemetry…" className="h-[60vh]" />
   }
 
-  const totalUsers = stats?.total_users || realtimeUsers.length
-  const highRiskUsers = stats?.high_risk_users ?? realtimeUsers.filter(u => (u.risk_score || 0) >= 50).length
-  const totalEvents = stats?.total_events || 0
-  const avgRisk = stats?.avg_risk_score?.toFixed(1) ?? (realtimeUsers.reduce((a, u) => a + (u.risk_score || 0), 0) / Math.max(realtimeUsers.length, 1)).toFixed(1)
-  const activeCount = realtimeUsers.filter(u => getSessionStatus(u.last_seen).label === 'Active').length
+  /* ── Column defs ───────────────────────────────────────────────────────── */
+
+  const threatColumns = [
+    {
+      key: 'rank', header: '#', width: '48px',
+      render: (_r, i) => <span className="font-mono text-on-surface-muted tabular-nums">{i + 1}</span>,
+    },
+    {
+      key: 'user', header: 'User',
+      render: (u) => (
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-on-surface truncate">{u.name || u.user || 'Unknown'}</span>
+            <span className="font-mono text-[0.7rem] text-on-surface-muted flex-shrink-0">{u.user}</span>
+          </div>
+          <p className="text-[0.7rem] text-on-surface-muted truncate">
+            {(u.role || 'Employee')}{u.department ? ` · ${u.department}` : ''}
+          </p>
+        </div>
+      ),
+    },
+    {
+      key: 'bar', header: 'Risk', width: '130px',
+      render: (u) => <RiskBar score={num(u.total_risk_score)} className="h-1.5 max-w-[110px]" />,
+    },
+    {
+      key: 'score', header: 'Score', numeric: true, width: '72px',
+      render: (u) => (
+        <span className="font-mono font-semibold tabular-nums" style={{ color: riskColor(num(u.total_risk_score)) }}>
+          {num(u.total_risk_score).toFixed(1)}
+        </span>
+      ),
+    },
+    {
+      key: 'level', header: 'Level', align: 'right', width: '104px',
+      render: (u) => <RiskBadge level={u.risk_level || riskBand(num(u.total_risk_score))} showIcon />,
+    },
+  ]
+
+  const sessionColumns = [
+    {
+      key: 'employee', header: 'Employee',
+      render: (u) => {
+        const score = num(u.risk_score)
+        return (
+          <div className="flex items-center gap-2.5">
+            <span
+              className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
+              style={{
+                color: riskColor(score),
+                background: `color-mix(in srgb, ${riskColor(score)} 14%, transparent)`,
+                border: `1px solid color-mix(in srgb, ${riskColor(score)} 32%, transparent)`,
+              }}
+            >
+              {initial(u.name)}
+            </span>
+            <div className="min-w-0">
+              <p className="font-medium text-on-surface leading-tight truncate">{u.name || 'Unknown'}</p>
+              <p className="text-[0.65rem] text-on-surface-muted font-mono">{u.user_id}</p>
+            </div>
+          </div>
+        )
+      },
+    },
+    {
+      key: 'role', header: 'Role · Dept',
+      render: (u) => (
+        <div className="min-w-0">
+          <p className="text-on-surface truncate">{u.role || '—'}</p>
+          <p className="text-[0.65rem] text-on-surface-muted truncate">{u.department || '—'}</p>
+        </div>
+      ),
+    },
+    {
+      key: 'risk', header: 'Risk', width: '140px',
+      render: (u) => {
+        const score = num(u.risk_score)
+        return (
+          <div className="flex items-center gap-2">
+            <RiskBar score={score} className="h-1.5 w-16" />
+            <span className="font-mono text-xs tabular-nums" style={{ color: riskColor(score) }}>
+              {score.toFixed(0)}
+            </span>
+          </div>
+        )
+      },
+    },
+    {
+      key: 'app', header: 'Active App',
+      render: (u) => {
+        const app = cleanApp(u.last_active_app)
+        return app ? (
+          <span className="flex items-center gap-1.5 text-on-surface-variant">
+            <Monitor size={12} className="text-on-surface-muted flex-shrink-0" />
+            <span className="font-mono text-xs truncate max-w-[120px]" title={u.last_active_app}>{app}</span>
+          </span>
+        ) : <span className="text-on-surface-muted">—</span>
+      },
+    },
+    {
+      key: 'status', header: 'Status',
+      render: (u) => {
+        const s = sessionState(u.last_seen)
+        return (
+          <div>
+            <span className="flex items-center gap-1.5">
+              <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${s.dot}`} />
+              <span className="text-on-surface-variant text-xs">{s.label}</span>
+            </span>
+            <p className="text-[0.65rem] text-on-surface-muted mt-0.5">{relativeTime(u.last_seen)}</p>
+          </div>
+        )
+      },
+    },
+    {
+      key: 'events', header: 'Events', numeric: true, width: '84px',
+      render: (u) => <span className="font-mono tabular-nums">{num(u.event_count).toLocaleString()}</span>,
+    },
+    {
+      key: 'action', header: '', align: 'right', width: '120px',
+      render: (u) => (
+        <button
+          onClick={(e) => { e.stopPropagation(); navigate(`/forensics?user=${encodeURIComponent(u.user_id || '')}`) }}
+          className="inline-flex items-center gap-1 text-xs text-primary hover:text-primary-container transition-colors"
+        >
+          <Eye size={13} /> Investigate
+        </button>
+      ),
+    },
+  ]
+
+  const distTotal = distribution.critical + distribution.high + distribution.medium + distribution.low || 1
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex justify-between items-center">
+    <div className="space-y-6 animate-fade-in">
+      {/* ── Header ──────────────────────────────────────────────────────── */}
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-on-surface">Security Operations Dashboard</h1>
-          <div className="flex items-center gap-2 mt-1 text-sm text-on-surface-muted">
-            <Clock className="w-4 h-4" />
-            <span>Last updated: {lastUpdate.toLocaleTimeString()}</span>
-            <button onClick={loadData} className="ml-3 flex items-center gap-1 px-3 py-1 bg-primary/20 text-primary rounded hover:bg-primary/30 text-xs transition-colors">
-              <RefreshCw className="w-3 h-3" /> Refresh
-            </button>
-          </div>
+          <h1 className="text-xl font-bold text-on-surface">Security Operations Center</h1>
+          <p className="text-xs text-on-surface-muted mt-0.5">
+            Insider-threat behavioral monitoring · refreshes every {POLL_MS / 1000}s
+          </p>
         </div>
-        <div className="flex items-center gap-2 bg-green-500/10 border border-green-500/30 px-3 py-1.5 rounded-full">
-          <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-          <span className="text-xs text-green-400 font-mono font-medium">LIVE MONITORING</span>
-        </div>
-      </div>
-
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-surface rounded-xl p-4 border border-surface-variant">
-          <div className="flex items-center gap-2 mb-3">
-            <Users className="w-4 h-4 text-primary" />
-            <span className="text-xs text-on-surface-muted uppercase tracking-wide">Monitored Users</span>
-          </div>
-          <div className="text-3xl font-bold text-on-surface">{totalUsers}</div>
-          <div className="text-xs text-on-surface-muted mt-1">
-            <span className="text-green-400 font-medium">{activeCount} active</span> · {realtimeUsers.length} total
-          </div>
-        </div>
-        <div className="bg-surface rounded-xl p-4 border border-surface-variant">
-          <div className="flex items-center gap-2 mb-3">
-            <ShieldAlert className="w-4 h-4 text-red-400" />
-            <span className="text-xs text-on-surface-muted uppercase tracking-wide">High-Risk Users</span>
-          </div>
-          <div className="text-3xl font-bold text-red-400">{highRiskUsers}</div>
-          <div className="text-xs text-on-surface-muted mt-1">risk score ≥ 50 / 100</div>
-        </div>
-        <div className="bg-surface rounded-xl p-4 border border-surface-variant">
-          <div className="flex items-center gap-2 mb-3">
-            <BarChart2 className="w-4 h-4 text-yellow-400" />
-            <span className="text-xs text-on-surface-muted uppercase tracking-wide">Telemetry Events</span>
-          </div>
-          <div className="text-3xl font-bold text-on-surface">{totalEvents.toLocaleString()}</div>
-          <div className="text-xs text-on-surface-muted mt-1">{stats?.high_risk_events?.toLocaleString() || 0} flagged anomalous</div>
-        </div>
-        <div className="bg-surface rounded-xl p-4 border border-surface-variant">
-          <div className="flex items-center gap-2 mb-3">
-            <TrendingUp className="w-4 h-4 text-orange-400" />
-            <span className="text-xs text-on-surface-muted uppercase tracking-wide">Avg Risk Score</span>
-          </div>
-          <div className={`text-3xl font-bold ${getRiskColor(parseFloat(avgRisk))}`}>{avgRisk}</div>
-          <div className="text-xs text-on-surface-muted mt-1">top threat: <span className="text-on-surface font-medium">{stats?.top_threat || '—'}</span></div>
+        <div className="flex items-center gap-3">
+          {lastUpdate && (
+            <span className="hidden sm:flex items-center gap-1.5 text-xs text-on-surface-muted font-mono">
+              <Clock size={12} /> {lastUpdate.toLocaleTimeString()}
+            </span>
+          )}
+          <span className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-success-dim/40 bg-success-dim/10">
+            <span className="live-dot" />
+            <span className="text-[0.7rem] font-mono font-semibold uppercase tracking-wider text-success">Live</span>
+          </span>
+          <Button variant="ghost" size="sm" icon={RefreshCw} onClick={loadData}>Refresh</Button>
         </div>
       </div>
 
-      {/* Telemetry integrity row */}
-      {integrity && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-surface rounded-xl p-4 border border-surface-variant col-span-2 lg:col-span-1">
-            <p className="text-xs text-on-surface-muted mb-1">Users Tracked (Telemetry)</p>
-            <p className="text-2xl font-bold text-on-surface">{integrity.total_users ?? 0}</p>
-            <p className="text-xs text-on-surface-muted mt-1">avg risk {(integrity.avg_risk_score || 0).toFixed(1)}</p>
-          </div>
-          <div className="bg-green-500/5 rounded-xl p-4 border border-green-500/20">
-            <p className="text-xs text-green-400 mb-1">In Zone (Normal)</p>
-            <p className="text-2xl font-bold text-green-400">{integrity.in_zone ?? 0}</p>
-          </div>
-          <div className="bg-yellow-500/5 rounded-xl p-4 border border-yellow-500/20">
-            <p className="text-xs text-yellow-400 mb-1">Anomalous Behaviour</p>
-            <p className="text-2xl font-bold text-yellow-400">{integrity.anomalous ?? 0}</p>
-          </div>
-          <div className="bg-red-500/5 rounded-xl p-4 border border-red-500/20">
-            <p className="text-xs text-red-400 mb-1">Critical Alerts</p>
-            <p className="text-2xl font-bold text-red-400">{integrity.critical ?? 0}</p>
+      {/* ── Error banner (primary pipeline unreachable) ─────────────────── */}
+      {error && (
+        <div className="flex items-center gap-3 rounded-md border border-error-container/50 bg-error-container/15 px-4 py-3">
+          <ServerCrash size={18} className="text-error flex-shrink-0" />
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-error">Backend unavailable</p>
+            <p className="text-xs text-on-surface-muted">
+              The risk pipeline API isn't responding. Is the server running? Retrying automatically every {POLL_MS / 1000}s.
+            </p>
           </div>
         </div>
       )}
 
-      {/* Top Threats + Recent Alerts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Top Threats */}
-        <div className="bg-surface rounded-xl border border-surface-variant overflow-hidden">
-          <div className="p-4 border-b border-surface-variant flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <ShieldAlert className="w-4 h-4 text-red-400" />
-              <h2 className="font-semibold text-on-surface text-sm">Top Threats</h2>
-            </div>
-            <span className="text-xs text-on-surface-muted">sorted by risk score</span>
+      {/* ── KPI stat cards ──────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+        <StatCard
+          icon={Users} accent="cyan" label="Monitored Users" value={totalUsers.toLocaleString()}
+          subtitle={sessions.length > 0 ? `${activeSessions} live session${activeSessions === 1 ? '' : 's'}` : 'risk pipeline'}
+        />
+        <StatCard
+          icon={ShieldAlert} accent="red" label="High-Risk Users" value={highRiskUsers.toLocaleString()}
+          subtitle="risk score ≥ 50"
+        />
+        <StatCard
+          icon={Activity} accent="amber" label="Total Events" value={totalEvents.toLocaleString()}
+          subtitle={`${highRiskEvents.toLocaleString()} flagged anomalous`}
+        />
+        <StatCard
+          icon={Gauge} accent={avgRisk >= 60 ? 'red' : avgRisk >= 40 ? 'amber' : 'green'}
+          label="Avg Risk Score" value={avgRisk.toFixed(1)}
+          subtitle="mean across users"
+        />
+        <StatCard
+          icon={Crosshair} accent="red" label="Top Threat"
+          value={topThreatUser || '—'}
+          subtitle={topThreatUser ? 'highest-risk user' : 'none flagged'}
+          className={topThreatUser ? 'cursor-pointer' : ''}
+        />
+      </div>
+
+      {/* ── Top Threats + Recent Alerts ─────────────────────────────────── */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        {/* Top Threats (spans 2) */}
+        <Panel padding="p-0" className="xl:col-span-2">
+          <div className="p-5 pb-0">
+            <SectionHeader
+              icon={ShieldAlert} iconColor="text-error" title="Top Threats"
+              subtitle="Highest-risk users from the behavioral pipeline"
+              actions={
+                <Button variant="ghost" size="sm" icon={ExternalLink} onClick={() => navigate('/users')}>
+                  All users
+                </Button>
+              }
+            />
           </div>
-          <div className="divide-y divide-surface-variant/50">
-            {topThreats.length === 0 ? (
-              <p className="text-center text-xs text-on-surface-muted py-6">No threat data</p>
-            ) : topThreats.map((u, i) => {
-              const score = u.total_risk_score || 0
-              return (
-                <div key={u.user || i}
-                  className="flex items-center gap-3 px-4 py-3 hover:bg-surface-variant/5 cursor-pointer"
-                  onClick={() => navigate('/forensics')}>
-                  <span className="text-xs font-mono text-on-surface-muted w-5 flex-shrink-0">#{i + 1}</span>
-                  <div className={`w-2 h-2 rounded-full flex-shrink-0 ${getRiskDot(score)}`} />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-medium text-on-surface truncate">{u.name || u.user}</p>
-                      <span className="text-xs font-mono text-on-surface-muted flex-shrink-0">{u.user}</span>
-                    </div>
-                    <p className="text-xs text-on-surface-muted">{u.role || 'Employee'} · {u.department || 'General'}</p>
-                    <div className="mt-1.5 flex items-center gap-2">
-                      <div className="flex-1 h-1.5 bg-surface-variant rounded-full overflow-hidden max-w-[100px]">
-                        <div className={`h-full rounded-full ${getRiskBarColor(score)}`} style={{ width: `${Math.min(100, score)}%` }} />
-                      </div>
-                    </div>
-                  </div>
-                  <div className="text-right flex-shrink-0">
-                    <p className={`text-lg font-bold font-mono ${getRiskColor(score)}`}>{score.toFixed(1)}</p>
-                    <span className={`text-[0.6rem] font-bold px-1.5 py-0.5 rounded ${getRiskBadge(u.risk_level)}`}>{u.risk_level || 'Low'}</span>
-                  </div>
-                </div>
-              )
-            })}
+          <div className="p-2">
+            <DataTable
+              columns={threatColumns}
+              rows={topThreats}
+              rowKey={(u, i) => u.user || i}
+              onRowClick={(u) => navigate(`/forensics?user=${encodeURIComponent(u.user || '')}`)}
+              empty={
+                <EmptyState
+                  icon={Radar} title="No risk data"
+                  description="The risk pipeline returned no ranked users yet."
+                />
+              }
+            />
           </div>
-        </div>
+        </Panel>
 
         {/* Recent Alerts */}
-        <div className="bg-surface rounded-xl border border-surface-variant overflow-hidden">
-          <div className="p-4 border-b border-surface-variant flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-orange-400" />
-              <h2 className="font-semibold text-on-surface text-sm">Recent Alerts</h2>
-            </div>
-            <button onClick={() => navigate('/alerts')} className="text-xs text-primary hover:underline flex items-center gap-1">
-              View all <ExternalLink className="w-3 h-3" />
-            </button>
+        <Panel padding="p-0">
+          <div className="p-5 pb-3">
+            <SectionHeader
+              icon={AlertTriangle} iconColor="text-tertiary" title="Recent Alerts"
+              subtitle="Latest anomalies"
+              actions={
+                <button
+                  onClick={() => navigate('/alerts')}
+                  className="text-xs text-primary hover:text-primary-container transition-colors flex items-center gap-1"
+                >
+                  View all <ExternalLink size={12} />
+                </button>
+              }
+            />
           </div>
-          <div className="divide-y divide-surface-variant/50">
-            {recentAlerts.length === 0 ? (
-              <p className="text-center text-xs text-on-surface-muted py-6">No alerts yet</p>
-            ) : recentAlerts.map((a, i) => (
-              <div key={a.alert_id || i} className="px-4 py-3 hover:bg-surface-variant/5 cursor-pointer" onClick={() => navigate('/alerts')}>
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-2.5 flex-1 min-w-0">
-                    <span className={`mt-0.5 text-[0.6rem] font-bold px-1.5 py-0.5 rounded flex-shrink-0 ${getSeverityBadge(a.severity)}`}>{(a.severity || '').toUpperCase()}</span>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <p className="text-sm font-semibold text-on-surface">{a.name || a.user}</p>
-                        <span className="text-xs font-mono text-on-surface-muted">({a.user})</span>
-                      </div>
-                      <p className="text-xs text-on-surface-muted truncate">{a.activity || 'Suspicious activity'}</p>
-                      {a.active_app && a.active_app !== 'unknown' && (
-                        <div className="flex items-center gap-1 mt-0.5">
-                          <Monitor className="w-3 h-3 text-on-surface-muted" />
-                          <span className="text-[0.65rem] text-on-surface-muted font-mono">{cleanAppName(a.active_app)}</span>
+
+          {recentAlerts.length === 0 ? (
+            <EmptyState
+              icon={AlertTriangle} title="No alerts" description="No anomalies flagged right now."
+            />
+          ) : (
+            <ul className="divide-y divide-surface-variant/60">
+              {recentAlerts.map((a, i) => {
+                const score = num(a.risk_score)
+                const sev = a.severity || riskBand(score)
+                return (
+                  <li key={a.alert_id || i}>
+                    <button
+                      onClick={() => navigate(`/forensics?user=${encodeURIComponent(a.user || '')}`)}
+                      className="w-full text-left px-5 py-3 hover:bg-surface-high transition-colors flex items-start gap-3"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <SeverityPill severity={sev} />
+                          <span className="text-sm font-medium text-on-surface truncate">
+                            {a.name || a.user || 'Unknown'}
+                          </span>
+                          <span className="text-[0.7rem] font-mono text-on-surface-muted flex-shrink-0">{a.user}</span>
                         </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="text-right flex-shrink-0">
-                    <span className={`text-sm font-bold font-mono ${getRiskColor(a.risk_score || 0)}`}>{Math.round(a.risk_score || 0)}</span>
-                    <p className="text-[0.65rem] text-on-surface-muted">{relativeTime(a.timestamp)}</p>
-                  </div>
+                        <p className="text-xs text-on-surface-muted truncate">
+                          {a.activity || a.mitre_technique || 'Behavioral anomaly detected'}
+                        </p>
+                        {cleanApp(a.active_app) && (
+                          <span className="mt-1 flex items-center gap-1 text-[0.65rem] text-on-surface-muted font-mono">
+                            <Monitor size={10} /> {cleanApp(a.active_app)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <span
+                          className="text-sm font-bold font-mono tabular-nums"
+                          style={{ color: riskColor(score) }}
+                        >
+                          {Math.round(score)}
+                        </span>
+                        <p className="text-[0.65rem] text-on-surface-muted mt-0.5">{relativeTime(a.timestamp)}</p>
+                      </div>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </Panel>
+      </div>
+
+      {/* ── Risk distribution (honest, computed from ranked users) ──────── */}
+      {topThreats.length > 0 && (
+        <Card>
+          <SectionHeader
+            icon={Radar} title="Risk Distribution"
+            subtitle={`Band breakdown of the top ${topThreats.length} ranked users`}
+          />
+          <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[
+              { band: 'critical', label: 'Critical', count: distribution.critical },
+              { band: 'high', label: 'High', count: distribution.high },
+              { band: 'medium', label: 'Medium', count: distribution.medium },
+              { band: 'low', label: 'Low', count: distribution.low },
+            ].map(({ band, label, count }) => (
+              <div key={band} className="well p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs text-on-surface-variant">{label}</span>
+                  <span className="font-mono font-semibold tabular-nums text-on-surface">{count}</span>
+                </div>
+                <div className="track h-1.5">
+                  <div
+                    className="track-fill"
+                    style={{ width: `${(count / distTotal) * 100}%`, background: riskColor(band === 'critical' ? 90 : band === 'high' ? 70 : band === 'medium' ? 50 : 20) }}
+                  />
                 </div>
               </div>
             ))}
           </div>
-        </div>
-      </div>
+        </Card>
+      )}
 
-      {/* Live Employee Sessions Table */}
-      <div className="bg-surface rounded-xl border border-surface-variant overflow-hidden">
-        <div className="p-4 border-b border-surface-variant flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Activity className="w-4 h-4 text-primary" />
-            <h2 className="font-semibold text-on-surface text-sm">Live Employee Sessions</h2>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="flex items-center gap-1 text-xs text-green-400"><span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />{activeCount} active</span>
-            <span className="text-xs text-on-surface-muted font-mono">{realtimeUsers.length} total</span>
-          </div>
+      {/* ── Live Employee Sessions (secondary; clean empty state) ───────── */}
+      <Panel padding="p-0">
+        <div className="p-5 pb-3">
+          <SectionHeader
+            icon={Activity} title="Live Employee Sessions"
+            subtitle="Real-time endpoint telemetry"
+            actions={
+              sessions.length > 0 ? (
+                <span className="flex items-center gap-3 text-xs">
+                  <span className="flex items-center gap-1.5 text-success">
+                    <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
+                    {activeSessions} active
+                  </span>
+                  <span className="text-on-surface-muted font-mono">{sessions.length} total</span>
+                </span>
+              ) : null
+            }
+          />
         </div>
-        {realtimeUsers.length === 0 ? (
-          <div className="text-center py-10">
-            <AlertTriangle className="w-8 h-8 mx-auto mb-3 text-on-surface-muted opacity-40" />
-            <p className="text-sm text-on-surface-muted">No sessions — start the telemetry agent</p>
-            <p className="text-xs text-on-surface-muted mt-1 font-mono">python -m src.telemetry.agent --user-id U001</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-surface-variant/10">
-                <tr>
-                  <th className="text-left py-3 px-4 text-xs font-semibold text-on-surface-muted uppercase tracking-wide">Employee</th>
-                  <th className="text-left py-3 px-4 text-xs font-semibold text-on-surface-muted uppercase tracking-wide">Role · Dept</th>
-                  <th className="text-left py-3 px-4 text-xs font-semibold text-on-surface-muted uppercase tracking-wide">Risk Score</th>
-                  <th className="text-left py-3 px-4 text-xs font-semibold text-on-surface-muted uppercase tracking-wide">Productivity</th>
-                  <th className="text-left py-3 px-4 text-xs font-semibold text-on-surface-muted uppercase tracking-wide">Active App</th>
-                  <th className="text-left py-3 px-4 text-xs font-semibold text-on-surface-muted uppercase tracking-wide">Status · Last Seen</th>
-                  <th className="text-left py-3 px-4 text-xs font-semibold text-on-surface-muted uppercase tracking-wide">Events</th>
-                  <th className="py-3 px-4" />
-                </tr>
-              </thead>
-              <tbody>
-                {realtimeUsers.map((user) => {
-                  const score = user.risk_score || 0
-                  const prod = Math.min(100, (user.productivity_score || 0) * 100)
-                  const status = getSessionStatus(user.last_seen)
-                  const rowHighlight = score >= 80 ? 'bg-red-500/5 hover:bg-red-500/10' : score >= 60 ? 'bg-orange-500/5 hover:bg-orange-500/10' : 'hover:bg-surface-variant/5'
-                  return (
-                    <tr key={user.user_id} className={`border-t border-surface-variant/30 transition-colors cursor-pointer ${rowHighlight}`}
-                      onClick={() => navigate('/forensics')}>
-                      {/* Employee */}
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-2.5">
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${getRiskBg(score)} border`}>
-                            {(user.name || 'U').charAt(0)}
-                          </div>
-                          <div>
-                            <p className="text-sm font-semibold text-on-surface leading-tight">{user.name}</p>
-                            <p className="text-[0.65rem] text-on-surface-muted font-mono">{user.user_id}</p>
-                          </div>
-                        </div>
-                      </td>
-                      {/* Role & Dept */}
-                      <td className="py-3 px-4">
-                        <p className="text-xs font-medium text-on-surface">{user.role}</p>
-                        <p className="text-[0.65rem] text-on-surface-muted">{user.department}</p>
-                      </td>
-                      {/* Risk Score */}
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-2">
-                          <div>
-                            <div className="flex items-center gap-1.5 mb-1">
-                              <span className={`text-base font-bold font-mono ${getRiskColor(score)}`}>{score.toFixed(1)}</span>
-                              <span className={`text-[0.6rem] font-bold px-1.5 py-0.5 rounded ${getRiskBadge(user.risk_level)}`}>{user.risk_level || 'Low'}</span>
-                            </div>
-                            <div className="w-24 h-1.5 bg-surface-variant rounded-full overflow-hidden">
-                              <div className={`h-full rounded-full transition-all ${getRiskBarColor(score)}`} style={{ width: `${score}%` }} />
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-                      {/* Productivity */}
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-2">
-                          <div className="w-20 h-1.5 bg-surface-variant rounded-full overflow-hidden">
-                            <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${prod}%` }} />
-                          </div>
-                          <span className="text-xs font-medium text-on-surface">{prod.toFixed(0)}%</span>
-                        </div>
-                      </td>
-                      {/* Active App */}
-                      <td className="py-3 px-4">
-                        {user.last_active_app && user.last_active_app !== '—' ? (
-                          <div className="flex items-center gap-1.5">
-                            <Monitor className="w-3 h-3 text-on-surface-muted flex-shrink-0" />
-                            <span className="text-xs font-mono text-on-surface truncate max-w-[100px]" title={user.last_window_title}>
-                              {cleanAppName(user.last_active_app)}
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="text-xs text-on-surface-muted">—</span>
-                        )}
-                      </td>
-                      {/* Status + Last Seen */}
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-1.5 mb-0.5">
-                          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${status.dot}`} />
-                          <span className={`text-xs font-medium ${status.text}`}>{status.label}</span>
-                        </div>
-                        <p className="text-[0.65rem] text-on-surface-muted">{relativeTime(user.last_seen)}</p>
-                      </td>
-                      {/* Events */}
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-1">
-                          <Zap className="w-3 h-3 text-on-surface-muted" />
-                          <span className="text-xs font-mono text-on-surface">{(user.event_count || 0).toLocaleString()}</span>
-                        </div>
-                      </td>
-                      {/* Action */}
-                      <td className="py-3 px-4">
-                        <button className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors"
-                          onClick={e => { e.stopPropagation(); navigate('/forensics') }}>
-                          <Eye className="w-3.5 h-3.5" /> Investigate
-                        </button>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+
+        <DataTable
+          columns={sessionColumns}
+          rows={sessions}
+          rowKey={(u, i) => u.user_id || i}
+          onRowClick={(u) => navigate(`/forensics?user=${encodeURIComponent(u.user_id || '')}`)}
+          empty={
+            <EmptyState
+              icon={WifiOff}
+              title="No live telemetry"
+              description="No endpoint agent is currently streaming sessions. The risk-pipeline data above stays live regardless."
+            />
+          }
+          className="px-1"
+        />
+      </Panel>
+
+      {/* ── Telemetry integrity (secondary; only when available) ────────── */}
+      {integrity && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <Card className="col-span-2 lg:col-span-1">
+            <p className="text-xs text-on-surface-muted mb-1">Users Tracked (Telemetry)</p>
+            <p className="text-2xl font-bold font-mono tabular-nums text-on-surface">{num(integrity.total_users)}</p>
+            <p className="text-xs text-on-surface-muted mt-1">avg risk {num(integrity.avg_risk_score).toFixed(1)}</p>
+          </Card>
+          <Card>
+            <p className="text-xs text-success mb-1">In Zone (Normal)</p>
+            <p className="text-2xl font-bold font-mono tabular-nums text-success">{num(integrity.in_zone)}</p>
+          </Card>
+          <Card>
+            <p className="text-xs text-tertiary mb-1">Anomalous</p>
+            <p className="text-2xl font-bold font-mono tabular-nums text-tertiary">{num(integrity.anomalous)}</p>
+          </Card>
+          <Card>
+            <p className="text-xs text-error mb-1">Critical</p>
+            <p className="text-2xl font-bold font-mono tabular-nums text-error">{num(integrity.critical)}</p>
+          </Card>
+        </div>
+      )}
     </div>
   )
 }

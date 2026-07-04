@@ -1,0 +1,11 @@
+{
+  "test_feature": {
+    "name": "test_feature",
+    "dtype": "float32",
+    "description": "Test feature for validation",
+    "created_at": "2026-07-04T19:48:37.514576",
+    "version": "1.0.0",
+    "statistics": {},
+    "quality_metrics": {}
+  }
+}

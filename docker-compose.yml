@@ -1,10 +1,12 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# Docker Compose — Full UBA Stack
+# Docker Compose — Full UBA Stack (backend API + frontend dashboard)
+#   docker compose up --build
+# The frontend (nginx) reverse-proxies /api to the backend, so the browser only
+# ever talks to the frontend origin — no CORS juggling, no internal hostnames.
 # ──────────────────────────────────────────────────────────────────────────────
-version: "3.9"
 
 services:
-  # ── Backend API ───────────────────────────────────────────────────────────
+  # ── Backend API ─────────────────────────────────────────────────────────────
   backend:
     build:
       context: .
@@ -13,29 +15,29 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./data:/app/data # Persist generated data
-      - ./models:/app/models # Persist trained models
+      - ./data:/app/data       # generated data + risk reports (source of truth)
+      - ./models:/app/models   # trained models
     environment:
       - UBA_LOG_LEVEL=INFO
       - UBA_CORS_ORIGINS=http://localhost:5173,http://localhost:3000
+      # Override the dev-only default PII salt in real deployments:
+      # - UBA_PII_SALT=change-me-in-production
     healthcheck:
-      test: [ "CMD", "python", "-c", "import httpx; r=httpx.get('http://localhost:8000/health'); assert r.status_code==200" ]
+      test: ["CMD", "python", "-c", "import httpx; r=httpx.get('http://localhost:8000/health'); assert r.status_code==200"]
       interval: 30s
       timeout: 5s
       retries: 3
     restart: unless-stopped
 
-  # ── Frontend (React/Vite) ─────────────────────────────────────────────────
+  # ── Frontend (React build served by nginx) ──────────────────────────────────
   frontend:
     build:
       context: ./website
       dockerfile: Dockerfile
     container_name: uba-frontend
     ports:
-      - "5173:5173"
+      - "5173:80"              # nginx listens on 80 inside the container
     depends_on:
       backend:
         condition: service_healthy
-    environment:
-      - VITE_API_URL=http://backend:8000
     restart: unless-stopped

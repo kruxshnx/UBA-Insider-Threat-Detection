@@ -27,6 +27,7 @@ logger = logging.getLogger("uba.data_pipeline.generator")
 fake = Faker()
 Faker.seed(42)
 np.random.seed(42)
+random.seed(42)  # Python's random module MUST be seeded for reproducibility
 
 # Robust path handling
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -88,14 +89,25 @@ def generate_daily_logs():
     for day in range(DAYS_TO_SIMULATE):
         date = current_date + timedelta(days=day)
 
-        # Skip weekends for most users
-        if date.weekday() >= 5 and random.random() > 0.1:
+        # Skip weekends for most users. During the malicious window the insider
+        # still operates (attackers don't respect the work calendar), so we do
+        # not skip the whole day in that case. The malicious window is inclusive
+        # of the configured start day so it aligns with the evaluation ground
+        # truth (ground_truth_start_day).
+        is_malicious_window = day >= INSIDER_THREAT_START_DAY
+        skip_weekend = date.weekday() >= 5 and random.random() > 0.1
+        if skip_weekend and not is_malicious_window:
             continue
 
         for user in users:
             uid = user['id']
             pc = user['pc']
             role = user['role']
+
+            # On a skipped weekend within the malicious window, only the insider
+            # is active (a lone late-night session stands out clearly).
+            if skip_weekend and uid != INSIDER_THREAT_USER:
+                continue
 
             # 1. Logon Event
             login_time = generate_noise_time(date, role)
@@ -114,14 +126,41 @@ def generate_daily_logs():
                 file_logs.append([f"E{event_id_counter}", uid, f_time, pc, fname, action, False])
                 event_id_counter += 1
 
-            # Scenario: Data Exfiltration — config-driven insider threat
-            if uid == INSIDER_THREAT_USER and day > INSIDER_THREAT_START_DAY:
-                for _ in range(20):
-                    f_time = logout_time + timedelta(minutes=random.randint(-30, 0))
-                    fname = f"CONFIDENTIAL_{fake.word()}.pdf"
-                    file_logs.append([f"E{event_id_counter}", uid, f_time, pc, fname, "File Copy", True])
-                    event_id_counter += 1
-                device_logs.append([f"E{event_id_counter}", uid, f_time - timedelta(minutes=5), pc, "Connect"])
+            # Scenario: Data Exfiltration — config-driven insider threat.
+            # The malicious bulk exfil (File Copy -> removable media + USB Connect)
+            # is staged AFTER-HOURS (>=20:00) on a subset of malicious days so that
+            # after-hours / oaf / removable_media / usb features clearly capture it.
+            # Not every day is malicious (keeps the pattern realistic and burst-like).
+            if uid == INSIDER_THREAT_USER and day >= INSIDER_THREAT_START_DAY:
+                # Most days in the malicious window are active exfil nights
+                is_exfil_night = random.random() < 0.85
+                if is_exfil_night:
+                    # Anchor the exfil session late at night (20:00 - 23:00)
+                    exfil_start = date + timedelta(
+                        hours=random.randint(20, 23),
+                        minutes=random.randint(0, 59),
+                    )
+
+                    # 1-3 USB devices connected during the exfil session
+                    for c in range(random.randint(1, 3)):
+                        connect_time = exfil_start - timedelta(minutes=5) + timedelta(minutes=c)
+                        device_logs.append([f"E{event_id_counter}", uid, connect_time, pc, "Connect"])
+                        event_id_counter += 1
+
+                    # Bulk File Copy to removable media, all after-hours
+                    n_copies = random.randint(20, 35)
+                    for _ in range(n_copies):
+                        f_time = exfil_start + timedelta(seconds=random.randint(0, 3600))
+                        fname = f"CONFIDENTIAL_{fake.word()}.pdf"
+                        file_logs.append([f"E{event_id_counter}", uid, f_time, pc, fname, "File Copy", True])
+                        event_id_counter += 1
+
+                    # A few sensitive-file deletes to cover tracks (Impact / anti-forensics)
+                    for _ in range(random.randint(2, 5)):
+                        f_time = exfil_start + timedelta(seconds=random.randint(0, 3600))
+                        fname = f"log_{fake.word()}.tmp"
+                        file_logs.append([f"E{event_id_counter}", uid, f_time, pc, fname, "File Delete", False])
+                        event_id_counter += 1
 
             # 3. HTTP Activity
             for _ in range(random.randint(5, 20)):

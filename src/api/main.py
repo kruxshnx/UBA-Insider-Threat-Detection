@@ -12,11 +12,11 @@ Features:
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, HTTPException, Depends, Header
+from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict
 from collections import defaultdict
 import logging
 import time
@@ -24,7 +24,11 @@ import uuid
 import os
 
 from src.api.config import settings
+# RBAC helpers re-exported for backwards compatibility (see security.py).
+from src.api.security import VALID_ROLES, get_current_role, require_role
 from src.api.routers import users, events, stats, analysis, timeline, alerts, models, telemetry
+
+__all__ = ["app", "VALID_ROLES", "get_current_role", "require_role"]
 
 # =============================================================================
 # LOGGING SETUP
@@ -93,43 +97,25 @@ class AuditLogger:
             f"{user_role}\n"
         )
         try:
-            with open(self.log_file, "a") as f:
+            # utf-8 + errors="replace" so non-ASCII paths/roles can't raise a
+            # UnicodeEncodeError under Windows' default cp1252 console codec.
+            with open(self.log_file, "a", encoding="utf-8", errors="replace") as f:
                 f.write(entry)
         except Exception:
             pass  # Never crash on audit-log I/O
 
 
 # =============================================================================
-# RBAC DEPENDENCY
+# RBAC DEPENDENCY (DEMO CONTROL)
 # =============================================================================
-VALID_ROLES = {"Admin", "Analyst", "Viewer"}
-
-
-def get_current_role(x_user_role: Optional[str] = Header(None)) -> str:
-    """
-    Extract the caller's role from the X-User-Role header.
-    Returns 'Viewer' if the header is missing (permissive default).
-    """
-    if x_user_role and x_user_role in VALID_ROLES:
-        return x_user_role
-    return "Viewer"
-
-
-def require_role(*allowed_roles: str):
-    """
-    Factory that returns a FastAPI dependency enforcing role membership.
-
-    Usage in a router:
-        @router.get("/secret", dependencies=[Depends(require_role("Admin"))])
-    """
-    def _check(role: str = Depends(get_current_role)):
-        if role not in allowed_roles:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Role '{role}' is not permitted. Required: {', '.join(allowed_roles)}",
-            )
-        return role
-    return _check
+# RBAC is enforced via the `X-User-Role` request header. This is a DEMO-ONLY
+# control: the header is client-supplied and therefore SPOOFABLE — any caller
+# can send `X-User-Role: Admin`. In production, replace it with a server-side
+# authenticated identity (signed JWT/OIDC/SSO) from which the role is derived.
+# The helpers (`get_current_role`, `require_role`, `VALID_ROLES`) now live in
+# `src.api.security` so routers can guard endpoints without importing `main`
+# and causing a circular import. They are re-exported here for backwards
+# compatibility with existing references.
 
 
 # =============================================================================
@@ -172,6 +158,14 @@ async def lifespan(app: FastAPI):
             logger.info("  + %s: %s", name, path)
         else:
             logger.warning("  - %s directory missing: %s", name, path)
+
+    # Initialise the users table (replaces the deprecated router on_event).
+    try:
+        from src.api.routers.users import ensure_users_table
+        ensure_users_table()
+        logger.info("  + Users table ready")
+    except Exception as e:
+        logger.warning("  - Users table init failed: %s", e)
 
     try:
         from src.api.services.data_loader import data_loader

@@ -81,7 +81,7 @@ class DataLoader:
             logger.debug("File not found: %s", path)
             return None
         try:
-            df = pd.read_csv(path)
+            df = pd.read_csv(path, encoding="utf-8")
             self._cache.set(cache_key, df)
             logger.debug("Loaded %s (%d rows)", filename, len(df))
             return df
@@ -182,24 +182,120 @@ class DataLoader:
             return None
 
     # ── Event Risk ───────────────────────────────────────────────────────────
+    # Behavioral / metadata columns surfaced from risk_report_events.csv when
+    # present. Anything absent is returned as None (not a fabricated value).
+    _EVENT_INT_COLS = (
+        "file_copy_count", "usb_count", "removable_media_count",
+        "delete_count", "event_count", "file_count", "email_count",
+    )
+    _EVENT_FLOAT_COLS = ("after_hours_ratio", "far", "eds", "iav", "oaf", "login_entropy", "lstm_score")
+    _EVENT_STR_COLS = ("role", "day", "explanation", "mitre_tactic", "alert_severity")
+
     def get_events_risk_data(self, limit: int = 100, min_score: float = 0.0) -> List[dict]:
+        """
+        Return risk-scored events from the pipeline's risk_report_events.csv.
+
+        Surfaces the real behavioral columns (file_copy_count, usb_count,
+        removable_media_count, after_hours_ratio, delete_count, event_count) plus
+        risk_score / explanation / mitre_tactic / should_alert / alert_severity
+        when present. Returns a typed empty list — never raises — if the file or
+        the risk_score column is missing.
+        """
         df = self._load_csv("risk_report_events.csv")
         if df is None or df.empty:
             return []
 
-        df = df.fillna(0)
-
-        if min_score > 0 and "risk_score" in df.columns:
-            df = df[df["risk_score"] >= min_score]
-
+        # Filter / sort only if risk_score exists; otherwise degrade gracefully.
         if "risk_score" in df.columns:
+            df = df.copy()
+            df["risk_score"] = pd.to_numeric(df["risk_score"], errors="coerce").fillna(0.0)
+            if min_score > 0:
+                df = df[df["risk_score"] >= min_score]
             df = df.sort_values("risk_score", ascending=False)
+        else:
+            logger.warning("risk_report_events.csv missing 'risk_score' column")
 
-        return df.head(limit).to_dict(orient="records")
+        df = df.head(limit)
+        events: List[dict] = []
+        for _, row in df.iterrows():
+            event = {
+                "user": str(row.get("user", "")) if pd.notna(row.get("user", "")) else "",
+                "risk_score": float(row.get("risk_score", 0) or 0),
+                # 'date' preferred, fall back to 'day' for the timestamp field
+                "timestamp": self._nz_str(row.get("date")) or self._nz_str(row.get("day")),
+                # No real 'activity' column in the pipeline output -> leave null
+                # rather than injecting a placeholder like "Unknown Activity".
+                "activity": self._nz_str(row.get("activity")),
+                "should_alert": self._to_bool(row.get("should_alert")),
+            }
+            for c in self._EVENT_STR_COLS:
+                if c in df.columns:
+                    event[c] = self._nz_str(row.get(c))
+            for c in self._EVENT_INT_COLS:
+                if c in df.columns:
+                    event[c] = self._to_int(row.get(c))
+            for c in self._EVENT_FLOAT_COLS:
+                if c in df.columns:
+                    event[c] = self._to_float(row.get(c))
+            events.append(event)
+        return events
 
-    # ── System Stats (SQLite) ────────────────────────────────────────────────
+    # ── Coercion helpers (defensive, never raise) ────────────────────────────
+    @staticmethod
+    def _nz_str(v) -> Optional[str]:
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return None
+        try:
+            if pd.isna(v):
+                return None
+        except (TypeError, ValueError):
+            pass
+        s = str(v).strip()
+        return s or None
+
+    @staticmethod
+    def _to_int(v) -> Optional[int]:
+        try:
+            if v is None or pd.isna(v):
+                return None
+            return int(float(v))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _to_float(v) -> Optional[float]:
+        try:
+            if v is None or pd.isna(v):
+                return None
+            return round(float(v), 4)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _to_bool(v) -> Optional[bool]:
+        if v is None:
+            return None
+        try:
+            if pd.isna(v):
+                return None
+        except (TypeError, ValueError):
+            pass
+        return str(v).strip().lower() in {"true", "1", "yes"}
+
+    # ── System Stats (single source of truth = risk pipeline CSVs) ───────────
+    HIGH_RISK_THRESHOLD = 50.0
+
     def get_system_stats(self) -> dict:
-        """Aggregate stats from real SQLite data only."""
+        """
+        Headline risk/threat numbers for the dashboard.
+
+        Single source of truth: the risk pipeline's CSV output
+        (``risk_report_users.csv`` for user-level numbers,
+        ``risk_report_events.csv`` for event-level numbers). This keeps the
+        dashboard coherent with ``/events/risk``, which reads the same event
+        CSV. Falls back to the live SQLite telemetry DB only when the CSVs are
+        absent, and always returns a fully typed payload (never raises).
+        """
         stats = {
             "total_users": 0,
             "high_risk_users": 0,
@@ -207,16 +303,45 @@ class DataLoader:
             "high_risk_events": 0,
             "avg_risk_score": 0.0,
             "top_threat": "None",
+            "data_source": "unavailable",
         }
+
+        users_df = self._load_csv("risk_report_users.csv")
+        events_df = self._load_csv("risk_report_events.csv")
+
+        used_csv = False
+
+        # ── User-level headline numbers from risk_report_users.csv ────────────
+        if users_df is not None and not users_df.empty and "total_risk_score" in users_df.columns:
+            used_csv = True
+            scores = pd.to_numeric(users_df["total_risk_score"], errors="coerce").fillna(0.0)
+            stats["total_users"] = int(len(users_df))
+            stats["high_risk_users"] = int((scores >= self.HIGH_RISK_THRESHOLD).sum())
+            stats["avg_risk_score"] = round(float(scores.mean()) if len(scores) else 0.0, 2)
+            if "user" in users_df.columns and len(scores):
+                top_idx = scores.idxmax()
+                top_user = users_df.loc[top_idx, "user"]
+                stats["top_threat"] = str(top_user) if pd.notna(top_user) else "None"
+
+        # ── Event-level headline numbers from risk_report_events.csv ──────────
+        if events_df is not None and not events_df.empty and "risk_score" in events_df.columns:
+            used_csv = True
+            escores = pd.to_numeric(events_df["risk_score"], errors="coerce").fillna(0.0)
+            stats["total_events"] = int(len(events_df))
+            stats["high_risk_events"] = int((escores >= self.HIGH_RISK_THRESHOLD).sum())
+
+        if used_csv:
+            stats["data_source"] = "risk_report (CSV pipeline output)"
+            return stats
+
+        # ── Fallback: live telemetry SQLite (clearly labelled) ────────────────
         try:
             conn = _get_db()
             cursor = conn.cursor()
-            # Users
             cursor.execute("""
                 SELECT COUNT(*) as total,
                        SUM(CASE WHEN risk_score >= 50 THEN 1 ELSE 0 END) as high_risk,
-                       AVG(risk_score) as avg_risk,
-                       user_id, MAX(risk_score) as max_risk
+                       AVG(risk_score) as avg_risk
                 FROM users
                 WHERE is_active = 1 OR is_active IS NULL
             """)
@@ -225,7 +350,6 @@ class DataLoader:
                 stats["total_users"] = int(u["total"])
                 stats["high_risk_users"] = int(u["high_risk"] or 0)
                 stats["avg_risk_score"] = round(float(u["avg_risk"] or 0), 2)
-                # Get the actual top threat user_id
                 cursor.execute("""
                     SELECT user_id FROM users
                     WHERE is_active = 1 OR is_active IS NULL
@@ -233,7 +357,6 @@ class DataLoader:
                 """)
                 top = cursor.fetchone()
                 stats["top_threat"] = top["user_id"] if top else "None"
-            # Telemetry events (only for registered users)
             cursor.execute("""
                 SELECT COUNT(*) as total,
                        SUM(CASE WHEN t.risk_score >= 50 THEN 1 ELSE 0 END) as high_risk
@@ -245,8 +368,9 @@ class DataLoader:
                 stats["total_events"] = int(t["total"])
                 stats["high_risk_events"] = int(t["high_risk"] or 0)
             conn.close()
+            stats["data_source"] = "telemetry.db (live fallback)"
         except Exception as e:
-            logger.error("get_system_stats SQLite error: %s", e)
+            logger.error("get_system_stats SQLite fallback error: %s", e)
         return stats
 
     # ── Dashboard Summary ────────────────────────────────────────────────────
@@ -434,7 +558,7 @@ class DataLoader:
             )
         if os.path.exists(eval_path):
             try:
-                with open(eval_path, "r") as f:
+                with open(eval_path, "r", encoding="utf-8", errors="replace") as f:
                     eval_metrics = f.read()
             except Exception:
                 pass
